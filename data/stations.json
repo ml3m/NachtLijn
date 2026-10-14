@@ -1,0 +1,14 @@
+[
+  {
+    "code": "UT",
+    "name": "Utrecht Centraal",
+    "lat": 52.0894,
+    "lon": 5.1100
+  },
+  {
+    "code": "AMS",
+    "name": "Amsterdam Centraal",
+    "lat": 52.3791,
+    "lon": 4.9003
+  }
+]
