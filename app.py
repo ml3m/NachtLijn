@@ -63,7 +63,7 @@ disruptions_state: dict = {
     "disruptions": [],
 }
 # Short TTL in-memory caches for interactive user requests
-journey_cache: Dict[int, tuple[float, dict]] = {}     # train_id -> (timestamp, data)
+journey_cache: Dict[str, tuple[float, dict]] = {}     # cache key -> (timestamp, data)
 departures_cache: Dict[str, tuple[float, list]] = {}  # station_code -> (timestamp, data)
 
 _backoff: float = 0
@@ -665,6 +665,7 @@ async def api_stream(request: Request):
                     yield ": ping\n\n"
         finally:
             _listeners.discard(q)
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @app.get("/api/health")
@@ -673,7 +674,7 @@ async def health_check():
     return {
         "status": "healthy",
         "app": "NachtLijn",
-        "trains_tracked": len(trains_state),
+        "trains_tracked": len(trains_state.get("trains", [])),
         "feed_mode": "zeromq_push" if push_active else "ns_polling",
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
@@ -963,7 +964,7 @@ async def api_journey(train_id: int, lat: float | None = None, lng: float | None
             "route_stations": route_stations,
             "route_geometry": route_geometry,
         }
-        journey_cache[train_id] = (now, result)
+        journey_cache[cache_key] = (now, result)
         return JSONResponse(result)
 
 
