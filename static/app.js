@@ -260,12 +260,12 @@
     } catch (_) {}
   }
 
-  // Force all checkboxes to checked by default on site load
+  // Set default toggle state on site load
   if ($provincesCb) $provincesCb.checked = true;
-  if ($borderCb) $borderCb.checked = true;
-  if ($trailsCb) $trailsCb.checked = true;
+  if ($borderCb) $borderCb.checked = false;
+  if ($trailsCb) $trailsCb.checked = false;
   if ($stationCb) $stationCb.checked = true;
-  if ($disruptionsCb) $disruptionsCb.checked = true;
+  if ($disruptionsCb) $disruptionsCb.checked = false;
 
   function syncToggleLayers() {
     provincesVisible = $provincesCb ? $provincesCb.checked : true;
