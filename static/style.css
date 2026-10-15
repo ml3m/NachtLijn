@@ -618,10 +618,16 @@ html, body, #map { width: 100%; height: 100%; overflow: hidden; font-family: 'Se
   transform-origin: center center;
 }
 .station-dot.hub {
-  width: 11px !important; height: 11px !important;
-  margin-left: -5.5px !important; margin-top: -5.5px !important;
+  width: 10px !important; height: 10px !important;
+  margin-left: -5px !important; margin-top: -5px !important;
   background: var(--ns-yellow); border: 2px solid var(--ns-blue);
-  box-shadow: 0 0 8px var(--ns-yellow), 0 0 14px rgba(255, 201, 23, 0.75);
+  box-shadow: 0 0 8px var(--ns-yellow), 0 0 12px rgba(255, 201, 23, 0.7);
+}
+.station-dot.mega {
+  width: 13px !important; height: 13px !important;
+  margin-left: -6.5px !important; margin-top: -6.5px !important;
+  background: var(--ns-yellow); border: 2.5px solid var(--ns-blue);
+  box-shadow: 0 0 0 2px rgba(255, 201, 23, 0.5), 0 0 12px var(--ns-yellow), 0 0 18px rgba(255, 201, 23, 0.9);
 }
 .station-dot:hover {
   background: var(--ns-yellow);

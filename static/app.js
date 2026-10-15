@@ -1187,13 +1187,14 @@
       for (const s of stationsData) {
         if (s.country && s.country !== "NL") continue;
 
-        const isHub = s.type === "KNOOPPUNT_INTERCITY_STATION" || s.type === "INTERCITY_STATION";
-        const dotClass = isHub ? "station-dot hub" : "station-dot";
-        const iconSize = isHub ? [12, 12] : [8, 8];
+        const isMega = s.type === "MEGA_STATION";
+        const isHub = isMega || s.type === "KNOOPPUNT_INTERCITY_STATION" || s.type === "INTERCITY_STATION";
+        const dotClass = isMega ? "station-dot mega" : (isHub ? "station-dot hub" : "station-dot");
+        const iconSize = isMega ? [13, 13] : (isHub ? [11, 11] : [7, 7]);
 
         const m = L.marker([s.lat, s.lng], {
           icon: L.divIcon({ className: dotClass, iconSize: iconSize }),
-          zIndexOffset: isHub ? 50 : 0
+          zIndexOffset: isMega ? 70 : (isHub ? 50 : 0)
         });
 
         // Tooltip on hover
