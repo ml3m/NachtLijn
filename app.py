@@ -668,7 +668,10 @@ async def api_journey(train_id: int, lat: float | None = None, lng: float | None
                 continue
 
             delay = dep.get("delayInSeconds") if dep.get("delayInSeconds") is not None else arr.get("delayInSeconds", 0)
-            track = dep.get("actualTrack") or dep.get("plannedTrack") or arr.get("actualTrack") or arr.get("plannedTrack") or ""
+            planned_track = dep.get("plannedTrack") or arr.get("plannedTrack") or ""
+            actual_track = dep.get("actualTrack") or arr.get("actualTrack") or planned_track
+            track_changed = bool(actual_track and planned_track and actual_track != planned_track)
+            track = actual_track or planned_track or ""
             t_iso = actual_dep or planned_dep or actual_arr or planned_arr or ""
 
             parsed_stops.append({
@@ -685,6 +688,9 @@ async def api_journey(train_id: int, lat: float | None = None, lng: float | None
                 "time": t_iso[11:16] if len(t_iso) >= 16 else "",
                 "delay_minutes": round((delay or 0) / 60),
                 "track": track,
+                "planned_track": planned_track,
+                "actual_track": actual_track,
+                "track_changed": track_changed,
                 "cancelled": arr.get("cancelled", False) or dep.get("cancelled", False),
             })
 
@@ -755,7 +761,10 @@ async def api_departures(station_code: str):
                 except Exception:
                     pass
 
-            track = d.get("actualTrack") or d.get("plannedTrack") or ""
+            planned_track = d.get("plannedTrack") or ""
+            actual_track = d.get("actualTrack") or planned_track
+            track_changed = bool(actual_track and planned_track and actual_track != planned_track)
+            track = actual_track or planned_track or ""
             
             parsed_deps.append({
                 "direction": d.get("direction", ""),
@@ -766,6 +775,9 @@ async def api_departures(station_code: str):
                 "actual_time": actual_hhmm,
                 "delay_minutes": delay_min,
                 "track": track,
+                "planned_track": planned_track,
+                "actual_track": actual_track,
+                "track_changed": track_changed,
                 "cancelled": d.get("cancelled", False),
                 "messages": [m.get("message", "") for m in d.get("messages", []) if m.get("message")]
             })

@@ -344,6 +344,42 @@ html, body, #map { width: 100%; height: 100%; overflow: hidden; font-family: 'Se
   background: var(--ns-yellow); color: var(--ns-blue); font-weight: 800; padding: 1.5px 6px;
   border-radius: 3px; font-size: 10px; display: inline-block; text-align: center;
 }
+.ns-track.track-changed {
+  background: #d32f2f;
+  color: #ffffff;
+  border: 1px solid #ff5252;
+  box-shadow: 0 0 8px rgba(255, 82, 82, 0.4);
+}
+.ns-track.track-changed .track-old {
+  opacity: 0.7;
+  text-decoration: line-through;
+  margin-right: 3px;
+  font-weight: normal;
+}
+.ns-track.track-changed .track-new {
+  font-weight: 900;
+  color: #fff;
+}
+.dep-clickable-row {
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.dep-clickable-row:hover {
+  background: rgba(255, 201, 23, 0.14) !important;
+}
+.dep-clickable-row:hover .ns-dest {
+  color: var(--ns-yellow);
+}
+.dep-clickable-row:hover .dep-row-arrow {
+  color: var(--ns-yellow);
+  transform: translateX(2px);
+}
+.dep-row-arrow {
+  display: inline-block;
+  font-size: 9px;
+  opacity: 0.6;
+  transition: transform 0.15s ease;
+}
 
 /* ── Disruption Markers & Overlay ──────────────────────────────── */
 .disruption-marker-wrap {
@@ -539,6 +575,21 @@ html, body, #map { width: 100%; height: 100%; overflow: hidden; font-family: 'Se
 .timeline-track {
   background: rgba(255,255,255,0.12); color: #fff; font-size: 10px; font-weight: 700;
   padding: 1px 5px; border-radius: 3px;
+}
+.timeline-track.track-changed {
+  background: rgba(211, 47, 47, 0.35);
+  border: 1px solid #ff5252;
+  color: #ff8a80;
+}
+.timeline-track.track-changed .track-old {
+  opacity: 0.7;
+  text-decoration: line-through;
+  margin-right: 3px;
+  font-weight: normal;
+}
+.timeline-track.track-changed .track-new {
+  color: #fff;
+  font-weight: 800;
 }
 .timeline-times { display: flex; gap: 8px; color: #8fa8cc; font-size: 11px; margin-top: 2px; }
 .timeline-delay { color: #ff4d6d; font-weight: 700; }

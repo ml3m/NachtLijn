@@ -808,14 +808,18 @@
         for (const d of deps) {
           const delayHtml = d.delay_minutes > 0 ? `<span class="ns-delay">+${d.delay_minutes}</span>` : "";
           const catClass = d.category === "IC" ? "IC" : d.category === "SPR" ? "SPR" : "other";
+          const trackHtml = d.track_changed
+            ? `<span class="ns-track track-changed" title="Spoorwijziging: van spoor ${d.planned_track} naar ${d.actual_track}"><s class="track-old">${d.planned_track}</s> <b class="track-new">${d.actual_track}</b></span>`
+            : `<span class="ns-track">${d.track || "—"}</span>`;
+
           rowsHtml += `
-            <tr>
+            <tr class="dep-clickable-row" onclick="window.focusTrainFromDeparture('${d.number}')" title="Klik om trein ${d.number} te volgen en dienstregeling te bekijken">
               <td><span class="ns-time">${d.planned_time}</span>${delayHtml}</td>
               <td>
                 <div class="ns-dest">${d.direction}</div>
-                <div class="ns-type ${catClass}">${d.category_name} ${d.number}</div>
+                <div class="ns-type ${catClass}">${d.category_name} ${d.number} <span class="dep-row-arrow">➔</span></div>
               </td>
-              <td style="text-align:right;"><span class="ns-track">${d.track || "—"}</span></td>
+              <td style="text-align:right;">${trackHtml}</td>
             </tr>
           `;
         }
@@ -846,6 +850,28 @@
       marker.getPopup().setContent(`<div style="padding:10px;color:#ff5252;">Kon vertrektijden niet ophalen.</div>`);
     }
   }
+
+  window.focusTrainFromDeparture = function (trainNumber) {
+    if (!trainNumber) return;
+    const tid = parseInt(trainNumber, 10);
+    map.closePopup();
+
+    if (markers[tid]) {
+      const pos = markers[tid].displayed;
+      map.flyTo([pos.lat, pos.lng], Math.max(map.getZoom(), 12), { duration: 1.2 });
+      followedTrainId = tid;
+      updateFollowButtons();
+      window.openJourney(tid);
+    } else {
+      window.openJourney(tid);
+      if ($feedback) {
+        $feedback.textContent = `Trein ${tid} geselecteerd (dienstregeling geopend, wacht op live radar fix)`;
+        setTimeout(() => {
+          if ($feedback.textContent.includes(String(tid))) $feedback.textContent = "";
+        }, 4000);
+      }
+    }
+  };
 
   $stationCb.addEventListener("change", () => {
     stationsVisible = $stationCb.checked;
@@ -1024,7 +1050,14 @@
           timeLabel = "Vertrek";
         }
         const delayText = data.next_stop.delay_minutes > 0 ? `<span class="ns-delay">+${data.next_stop.delay_minutes} min</span>` : "<span style='color:#00e676;'>Op tijd</span>";
-        const trackText = data.next_stop.track ? `<span class="ns-track">Spoor ${data.next_stop.track}</span>` : "";
+        let trackText = "";
+        if (data.next_stop.track) {
+          if (data.next_stop.track_changed) {
+            trackText = `<span class="ns-track track-changed" title="Spoorwijziging">Spoor <s class="track-old">${data.next_stop.planned_track}</s> <b class="track-new">${data.next_stop.actual_track}</b></span>`;
+          } else {
+            trackText = `<span class="ns-track">Spoor ${data.next_stop.track}</span>`;
+          }
+        }
         bannerHtml = `
           <div class="next-station-banner ${isAtDest ? "at-dest" : ""}">
             <span class="next-station-tag">${bannerTag}</span>
@@ -1054,7 +1087,14 @@
           }
         }
         const delayStr = s.delay_minutes > 0 ? `<span class="timeline-delay">+${s.delay_minutes} min</span>` : "";
-        const trackStr = s.track ? `<span class="timeline-track">Spoor ${s.track}</span>` : "";
+        let trackStr = "";
+        if (s.track) {
+          if (s.track_changed) {
+            trackStr = `<span class="timeline-track track-changed" title="Spoorwijziging">Spoor <s class="track-old">${s.planned_track}</s> <b class="track-new">${s.actual_track}</b></span>`;
+          } else {
+            trackStr = `<span class="timeline-track">Spoor ${s.track}</span>`;
+          }
+        }
 
         stopsHtml += `
           <div class="${itemClass}" ${isNext ? 'id="timeline-active-next"' : ""}>
