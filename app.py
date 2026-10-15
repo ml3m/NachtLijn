@@ -575,19 +575,24 @@ async def _poll_disruptions(client: httpx.AsyncClient):
             if not d.get("isActive", True):
                 continue
             sections = []
-            for pub in d.get("publicationSections", []):
-                sec = pub.get("section", {})
-                st_list = sec.get("stations", [])
+            for pub in (d.get("publicationSections") or []):
+                sec = pub.get("section") or {}
+                st_list = sec.get("stations") or []
                 coords = []
                 for s in st_list:
-                    c = s.get("coordinate", {})
+                    if not isinstance(s, dict):
+                        continue
+                    c = s.get("coordinate") or {}
                     if c.get("lat") and c.get("lng"):
-                        coords.append({
-                            "name": s.get("name"),
-                            "code": s.get("stationCode"),
-                            "lat": float(c["lat"]),
-                            "lng": float(c["lng"])
-                        })
+                        try:
+                            coords.append({
+                                "name": s.get("name") or "",
+                                "code": s.get("stationCode") or "",
+                                "lat": float(c["lat"]),
+                                "lng": float(c["lng"])
+                            })
+                        except (ValueError, TypeError):
+                            continue
                 if len(coords) >= 2:
                     sections.append(coords)
             
@@ -862,25 +867,27 @@ async def api_journey(train_id: int, lat: float | None = None, lng: float | None
 
         route_stations = []
         for s in raw_stops:
-            st_info = s.get("stop", {})
-            code = (s.get("id", "").split("_")[0] or st_info.get("stationCode", "")).lower()
+            st_info = s.get("stop") or {}
+            s_id = s.get("id") or ""
+            st_code = st_info.get("stationCode") or ""
+            code = (s_id.split("_")[0] if s_id else st_code).lower()
             lat_val = st_info.get("lat")
             lng_val = st_info.get("lng")
             if code:
                 route_stations.append({
                     "code": code,
-                    "name": st_info.get("name", ""),
+                    "name": st_info.get("name") or "",
                     "lat": float(lat_val) if lat_val is not None else None,
                     "lng": float(lng_val) if lng_val is not None else None,
-                    "status": s.get("status", ""),
+                    "status": s.get("status") or "",
                 })
 
         route_geometry = _build_route_geometry(route_stations)
 
         for s in raw_stops:
-            st_info = s.get("stop", {})
-            arr = s.get("arrivals", [{}])[0] if s.get("arrivals") else {}
-            dep = s.get("departures", [{}])[0] if s.get("departures") else {}
+            st_info = s.get("stop") or {}
+            arr = (s.get("arrivals") or [{}])[0] if s.get("arrivals") else {}
+            dep = (s.get("departures") or [{}])[0] if s.get("departures") else {}
             prod = dep.get("product") or arr.get("product") or {}
             if prod:
                 operator_name = operator_name or prod.get("operatorName", "")
@@ -892,7 +899,7 @@ async def api_journey(train_id: int, lat: float | None = None, lng: float | None
             actual_dep = dep.get("actualTime")
 
             # Remove all stations where the train does not stop (skipped stations)
-            if not (planned_arr or planned_dep):
+            if not (planned_arr or planned_dep or actual_arr or actual_dep):
                 continue
 
             delay = dep.get("delayInSeconds") if dep.get("delayInSeconds") is not None else arr.get("delayInSeconds", 0)
@@ -901,12 +908,14 @@ async def api_journey(train_id: int, lat: float | None = None, lng: float | None
             track_changed = bool(actual_track and planned_track and actual_track != planned_track)
             track = actual_track or planned_track or ""
             t_iso = actual_dep or planned_dep or actual_arr or planned_arr or ""
-            st_code = (s.get("id", "").split("_")[0] or st_info.get("stationCode", "")).lower()
+            s_id = s.get("id") or ""
+            st_code = st_info.get("stationCode") or ""
+            st_code_clean = (s_id.split("_")[0] if s_id else st_code).lower()
 
             parsed_stops.append({
                 "id": s.get("id"),
-                "code": st_code,
-                "name": st_info.get("name", ""),
+                "code": st_code_clean,
+                "name": st_info.get("name") or "",
                 "lat": st_info.get("lat"),
                 "lng": st_info.get("lng"),
                 "status": "STOP",
@@ -921,7 +930,7 @@ async def api_journey(train_id: int, lat: float | None = None, lng: float | None
                 "planned_track": planned_track,
                 "actual_track": actual_track,
                 "track_changed": track_changed,
-                "cancelled": arr.get("cancelled", False) or dep.get("cancelled", False),
+                "cancelled": bool(arr.get("cancelled", False) or dep.get("cancelled", False)),
             })
 
         origin = parsed_stops[0]["name"] if parsed_stops else ""
@@ -983,9 +992,9 @@ async def api_departures(station_code: str):
         deps_raw = data["payload"].get("departures", [])
         parsed_deps = []
         for d in deps_raw:
-            prod = d.get("product", {})
-            planned_dt = d.get("plannedDateTime", "")
-            actual_dt = d.get("actualDateTime", "")
+            prod = d.get("product") or {}
+            planned_dt = d.get("plannedDateTime") or ""
+            actual_dt = d.get("actualDateTime") or ""
             
             # Extract simple time string HH:MM
             planned_hhmm = planned_dt[11:16] if len(planned_dt) >= 16 else ""
@@ -1009,10 +1018,10 @@ async def api_departures(station_code: str):
             track = actual_track or planned_track or ""
             
             parsed_deps.append({
-                "direction": d.get("direction", ""),
-                "category": prod.get("categoryCode", "TRAIN"),
-                "category_name": prod.get("shortCategoryName", prod.get("categoryCode", "")),
-                "number": prod.get("number", ""),
+                "direction": d.get("direction") or "",
+                "category": prod.get("categoryCode") or "TRAIN",
+                "category_name": prod.get("shortCategoryName") or prod.get("categoryCode") or "TRAIN",
+                "number": prod.get("number") or "",
                 "planned_time": planned_hhmm,
                 "actual_time": actual_hhmm,
                 "delay_minutes": delay_min,
@@ -1020,8 +1029,8 @@ async def api_departures(station_code: str):
                 "planned_track": planned_track,
                 "actual_track": actual_track,
                 "track_changed": track_changed,
-                "cancelled": d.get("cancelled", False),
-                "messages": [m.get("message", "") for m in d.get("messages", []) if m.get("message")]
+                "cancelled": bool(d.get("cancelled", False)),
+                "messages": [m.get("message", "") for m in (d.get("messages") or []) if isinstance(m, dict) and m.get("message")]
             })
 
         result = {"station": code, "departures": parsed_deps}
