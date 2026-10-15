@@ -133,6 +133,55 @@
   let disruptionsData = null;
   let disruptionsVisible = true;
   let showTrails = true;
+  const stationMarkers = {};
+  let pendingUrlTrainId = null;
+  let pendingUrlStationCode = null;
+
+  function updateUrlParam(key, val) {
+    try {
+      const url = new URL(window.location);
+      if (val) {
+        url.searchParams.set(key, val);
+        if (key === "train") url.searchParams.delete("station");
+        if (key === "station") url.searchParams.delete("train");
+      } else {
+        url.searchParams.delete(key);
+      }
+      window.history.replaceState({}, "", url);
+    } catch (_) {}
+  }
+
+  function checkUrlParams() {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const trainParam = params.get("train");
+      const stationParam = params.get("station");
+
+      if (trainParam) {
+        const tid = parseInt(trainParam, 10);
+        if (markers[tid]) {
+          const m = markers[tid];
+          map.flyTo([m.displayed.lat, m.displayed.lng], Math.max(map.getZoom(), 12), { duration: 1.2 });
+          followedTrainId = tid;
+          updateFollowButtons();
+          window.openJourney(tid);
+        } else {
+          pendingUrlTrainId = tid;
+          window.openJourney(tid);
+        }
+      } else if (stationParam) {
+        const code = stationParam.toUpperCase();
+        if (stationMarkers[code]) {
+          const entry = stationMarkers[code];
+          map.flyTo([entry.station.lat, entry.station.lng], Math.max(map.getZoom(), 13), { duration: 1.2 });
+          entry.marker.openPopup();
+          fetchStationDepartures(entry.station, entry.marker);
+        } else {
+          pendingUrlStationCode = code;
+        }
+      }
+    } catch (_) {}
+  }
 
   // Force all 4 checkboxes to checked by default on site load
   if ($borderCb) $borderCb.checked = true;
@@ -832,11 +881,43 @@
         fetchStationDepartures(s, m);
       });
 
+      m.on("popupclose", () => {
+        updateUrlParam("station", null);
+      });
+
+      if (s.code) {
+        stationMarkers[s.code.toUpperCase()] = { marker: m, station: s };
+      }
+
       stationsLayer.addLayer(m);
     }
 
     stationsLayer.addTo(map);
+
+    if (pendingUrlStationCode && stationMarkers[pendingUrlStationCode]) {
+      const code = pendingUrlStationCode;
+      pendingUrlStationCode = null;
+      const entry = stationMarkers[code];
+      map.flyTo([entry.station.lat, entry.station.lng], Math.max(map.getZoom(), 13), { duration: 1.2 });
+      setTimeout(() => {
+        entry.marker.openPopup();
+        fetchStationDepartures(entry.station, entry.marker);
+      }, 400);
+    }
   }
+
+  window.focusStation = function (stationCode) {
+    if (!stationCode) return;
+    const code = stationCode.toUpperCase();
+    if (stationMarkers[code]) {
+      const entry = stationMarkers[code];
+      map.flyTo([entry.station.lat, entry.station.lng], Math.max(map.getZoom(), 13), { duration: 1.2 });
+      entry.marker.openPopup();
+      fetchStationDepartures(entry.station, entry.marker);
+    } else {
+      pendingUrlStationCode = code;
+    }
+  };
 
   function hideStations() {
     if (stationsLayer && map.hasLayer(stationsLayer)) {
@@ -845,6 +926,7 @@
   }
 
   async function fetchStationDepartures(station, marker) {
+    updateUrlParam("station", station.code);
     try {
       const r = await fetch(`/api/departures/${station.code}`);
       if (!r.ok) throw new Error();
@@ -1143,6 +1225,7 @@
   // ── Journey Timeline Drawer ──────────────────────────────────────
   window.openJourney = async function (trainId) {
     activeSelectedTrainId = trainId;
+    updateUrlParam("train", trainId);
     $drawer.classList.remove("drawer-closed");
     $drawerTitle.textContent = `Trein ${trainId}`;
     $drawerSub.textContent = `Dienstregeling en haltes ophalen…`;
@@ -1287,6 +1370,7 @@
 
   $drawerClose.addEventListener("click", () => {
     $drawer.classList.add("drawer-closed");
+    updateUrlParam("train", null);
     if (openPopupId === null) {
       activeRouteLayer.clearLayers();
       activeSelectedTrainId = null;
@@ -1547,6 +1631,17 @@
         delete markers[id];
       }
     }
+
+    // Check if a train was requested via URL query param and just spawned on radar
+    if (pendingUrlTrainId && markers[pendingUrlTrainId]) {
+      const tid = pendingUrlTrainId;
+      pendingUrlTrainId = null;
+      const m = markers[tid];
+      map.flyTo([m.displayed.lat, m.displayed.lng], Math.max(map.getZoom(), 12), { duration: 1.2 });
+      followedTrainId = tid;
+      updateFollowButtons();
+      window.openJourney(tid);
+    }
   }
 
   // ── Animation Loop (Track-Snapped Along-Track Extrapolation) ──────
@@ -1713,6 +1808,8 @@
   loadStations();
   syncToggleLayers();
   updateNachtnetStatus();
+  checkUrlParams();
+  window.addEventListener("popstate", checkUrlParams);
   connectSSE();
   requestAnimationFrame(animate);
   requestAnimationFrame(updateCountdown);
