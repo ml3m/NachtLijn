@@ -3,6 +3,7 @@
 import asyncio
 import gzip
 import json
+import math
 import os
 import time
 import xml.etree.ElementTree as ET
@@ -185,6 +186,169 @@ async def _poll_trains(client: httpx.AsyncClient):
         trains_state["next_update_at"] = time.time() + POLL_INTERVAL + _backoff
 
 
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    R = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2.0)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2.0)**2
+    return 2.0 * R * math.asin(math.sqrt(max(0.0, min(1.0, a))))
+
+
+def _point_to_segment_dist_and_t(plat: float, plon: float, s1lat: float, s1lon: float, s2lat: float, s2lon: float) -> tuple[float, float]:
+    mean_lat = math.radians((s1lat + s2lat) / 2.0)
+    cos_lat = math.cos(mean_lat)
+    x1, y1 = s1lon * cos_lat, s1lat
+    x2, y2 = s2lon * cos_lat, s2lat
+    px, py = plon * cos_lat, plat
+    dx = x2 - x1
+    dy = y2 - y1
+    seg_len_sq = dx * dx + dy * dy
+    if seg_len_sq == 0:
+        return _haversine_km(plat, plon, s1lat, s1lon), 0.0
+    t = ((px - x1) * dx + (py - y1) * dy) / seg_len_sq
+    t_clamped = max(0.0, min(1.0, t))
+    proj_lat = y1 + t_clamped * dy
+    proj_lon = (x1 + t_clamped * dx) / (cos_lat if cos_lat != 0 else 1.0)
+    return _haversine_km(plat, plon, proj_lat, proj_lon), t
+
+
+def _resolve_journey_station_progress(parsed_stops: list[dict], train_lat: float | None, train_lng: float | None) -> int:
+    N = len(parsed_stops)
+    if N == 0:
+        return 0
+    if N == 1:
+        parsed_stops[0]["state"] = "next"
+        return 0
+
+    # 1. SPATIAL RESOLUTION (Preferred: uses actual physical GPS position)
+    if train_lat is not None and train_lng is not None:
+        # A. Check if train is directly at/near final destination (within 650m)
+        dest_lat, dest_lng = parsed_stops[-1].get("lat"), parsed_stops[-1].get("lng")
+        if dest_lat is not None and dest_lng is not None:
+            dist_to_dest = _haversine_km(train_lat, train_lng, dest_lat, dest_lng)
+            if dist_to_dest <= 0.65:
+                for idx in range(N - 1):
+                    parsed_stops[idx]["state"] = "passed"
+                parsed_stops[-1]["state"] = "next"
+                parsed_stops[-1]["at_destination"] = True
+                return N - 1
+
+        # B. Check if train is at origin (within 650m of origin and far from destination)
+        orig_lat, orig_lng = parsed_stops[0].get("lat"), parsed_stops[0].get("lng")
+        if orig_lat is not None and orig_lng is not None:
+            dist_to_orig = _haversine_km(train_lat, train_lng, orig_lat, orig_lng)
+            if dist_to_orig <= 0.65 and (dest_lat is None or _haversine_km(train_lat, train_lng, dest_lat, dest_lng) > 2.0):
+                parsed_stops[0]["state"] = "next"
+                parsed_stops[0]["at_origin"] = True
+                for idx in range(1, N):
+                    parsed_stops[idx]["state"] = "upcoming"
+                return 0
+
+        # C. Check if train is dwelling directly at any station (within 450m)
+        dwelling_idx = None
+        min_dwelling_dist = float("inf")
+        for idx, st in enumerate(parsed_stops):
+            s_lat, s_lng = st.get("lat"), st.get("lng")
+            if s_lat is not None and s_lng is not None:
+                d = _haversine_km(train_lat, train_lng, s_lat, s_lng)
+                if d < 0.45 and d < min_dwelling_dist:
+                    min_dwelling_dist = d
+                    dwelling_idx = idx
+
+        if dwelling_idx is not None:
+            for idx in range(N):
+                if idx < dwelling_idx:
+                    parsed_stops[idx]["state"] = "passed"
+                elif idx == dwelling_idx:
+                    parsed_stops[idx]["state"] = "next"
+                    parsed_stops[idx]["at_station"] = True
+                else:
+                    parsed_stops[idx]["state"] = "upcoming"
+            return dwelling_idx
+
+        # D. Match along segment chain S_i -> S_{i+1}
+        best_seg_idx = 0
+        best_score = float("inf")
+        for i in range(N - 1):
+            s1, s2 = parsed_stops[i], parsed_stops[i + 1]
+            if s1.get("lat") is None or s2.get("lat") is None:
+                continue
+            dist, t = _point_to_segment_dist_and_t(
+                train_lat, train_lng,
+                s1["lat"], s1["lng"],
+                s2["lat"], s2["lng"]
+            )
+            # Give priority to valid projections on segment
+            penalty = 0.0 if (0.0 <= t <= 1.0) else (dist * 0.6)
+            score = dist + penalty
+            if score < best_score:
+                best_score = score
+                best_seg_idx = i
+
+        next_idx = best_seg_idx + 1
+        for idx in range(N):
+            if idx < next_idx:
+                parsed_stops[idx]["state"] = "passed"
+            elif idx == next_idx:
+                parsed_stops[idx]["state"] = "next"
+            else:
+                parsed_stops[idx]["state"] = "upcoming"
+        return next_idx
+
+    # 2. TEMPORAL UNWRAPPED MINUTES FALLBACK (if GPS is completely absent)
+    now_dt = datetime.now()
+    now_min = now_dt.hour * 60 + now_dt.minute
+
+    stop_mins = []
+    for st in parsed_stops:
+        t_str = st.get("time", "")
+        if len(t_str) == 5 and t_str[2] == ":":
+            try:
+                stop_mins.append(int(t_str[:2]) * 60 + int(t_str[3:]))
+            except ValueError:
+                stop_mins.append(None)
+        else:
+            stop_mins.append(None)
+
+    unwrapped = []
+    last_val = 0
+    day_offset = 0
+    for m in stop_mins:
+        if m is None:
+            unwrapped.append(None)
+            continue
+        if unwrapped and m < last_val - 300:
+            day_offset += 1440
+        last_val = m
+        unwrapped.append(m + day_offset)
+
+    first_valid = next((m for m in unwrapped if m is not None), 0)
+    best_offset = 0
+    min_delta = float("inf")
+    for cand_offset in (-1440, 0, 1440):
+        cand_now = now_min + cand_offset
+        delta = abs(cand_now - first_valid)
+        if delta < min_delta:
+            min_delta = delta
+            best_offset = cand_offset
+    aligned_now = now_min + best_offset
+
+    next_idx = N - 1
+    for idx, u in enumerate(unwrapped):
+        if u is not None and u >= aligned_now:
+            next_idx = idx
+            break
+
+    for idx in range(N):
+        if idx < next_idx:
+            parsed_stops[idx]["state"] = "passed"
+        elif idx == next_idx:
+            parsed_stops[idx]["state"] = "next"
+        else:
+            parsed_stops[idx]["state"] = "upcoming"
+    return next_idx
+
+
 last_zmq_msg_time: float = 0.0
 
 
@@ -219,12 +383,37 @@ async def _ndov_zeromq_consumer():
                             lng_el = part.find("{http://schemas.datacontract.org/2004/07/Cognos.Infrastructure.Models}Longitude")
                             spd_el = part.find("{http://schemas.datacontract.org/2004/07/Cognos.Infrastructure.Models}Snelheid")
                             hdg_el = part.find("{http://schemas.datacontract.org/2004/07/Cognos.Infrastructure.Models}Richting")
+                            gps_el = part.find("{http://schemas.datacontract.org/2004/07/Cognos.Infrastructure.Models}GpsDatumTijd")
                             if lat_el is not None and lng_el is not None and lat_el.text and lng_el.text:
                                 try:
                                     lat = float(lat_el.text)
                                     lng = float(lng_el.text)
                                     speed = float(spd_el.text) if spd_el is not None and spd_el.text else 0.0
                                     heading = float(hdg_el.text) if hdg_el is not None and hdg_el.text else 0.0
+                                    gps_str = gps_el.text.strip() if gps_el is not None and gps_el.text else ""
+
+                                    # GPS timestamp age verification
+                                    gps_age = 0.0
+                                    if gps_str:
+                                        try:
+                                            gps_dt = datetime.fromisoformat(gps_str.replace("Z", "+00:00"))
+                                            gps_age = (datetime.now(timezone.utc) - gps_dt).total_seconds()
+                                        except Exception:
+                                            pass
+
+                                    # If fix is older than 50s, the train is no longer moving actively
+                                    if gps_age > 50.0:
+                                        speed = 0.0
+
+                                    # Zero-movement detection: if coordinates haven't changed, train is stationary
+                                    prev = trains_registry.get(tid)
+                                    if prev:
+                                        dist_moved_m = _haversine_km(lat, lng, prev["lat"], prev["lng"]) * 1000.0
+                                        time_delta = now - prev.get("last_seen", now)
+                                        # If moved less than 5m and at least 6s elapsed, clamp speed to 0
+                                        if dist_moved_m < 5.0 and time_delta >= 6.0:
+                                            speed = 0.0
+
                                     t_type = "IC" if (tid < 4000 or (11000 <= tid < 14000)) else ("SPR" if (tid < 10000 or (20000 <= tid < 30000)) else "other")
                                     trains_registry[tid] = {
                                         "id": tid,
@@ -234,6 +423,7 @@ async def _ndov_zeromq_consumer():
                                         "heading": heading,
                                         "type": t_type,
                                         "source": "NDOV-ZMQ",
+                                        "gps_time": gps_str,
                                         "last_seen": now
                                     }
                                     changed = True
@@ -241,10 +431,11 @@ async def _ndov_zeromq_consumer():
                                     pass
                                 break
 
-                    # Prune trains not seen for > 80s
+                    # Prune trains not seen or with stale GPS > 80s
                     cutoff = now - 80
                     for tid in list(trains_registry.keys()):
-                        if trains_registry[tid]["last_seen"] < cutoff:
+                        t_item = trains_registry[tid]
+                        if t_item["last_seen"] < cutoff:
                             del trains_registry[tid]
 
                     if changed and trains_registry:
@@ -435,10 +626,17 @@ async def api_disruptions():
 
 
 @app.get("/api/journey/{train_id}")
-async def api_journey(train_id: int):
+async def api_journey(train_id: int, lat: float | None = None, lng: float | None = None):
+    # Lookup live GPS position from active registry if not provided in query
+    if (lat is None or lng is None) and train_id in trains_registry:
+        live_t = trains_registry[train_id]
+        lat = live_t.get("lat")
+        lng = live_t.get("lng")
+
     now = time.time()
-    if train_id in journey_cache and (now - journey_cache[train_id][0]) < 30:
-        return JSONResponse(journey_cache[train_id][1])
+    cache_key = f"{train_id}_{round(lat or 0, 3)}_{round(lng or 0, 3)}"
+    if cache_key in journey_cache and (now - journey_cache[cache_key][0]) < 12:
+        return JSONResponse(journey_cache[cache_key][1])
 
     async with httpx.AsyncClient(http2=False) as client:
         data = await _fetch_json(client, "/reisinformatie-api/api/v2/journey", params={"train": train_id})
@@ -493,36 +691,8 @@ async def api_journey(train_id: int):
         origin = parsed_stops[0]["name"] if parsed_stops else ""
         destination = parsed_stops[-1]["name"] if parsed_stops else ""
 
-        # Identify next stop where train heads to based on current timestamp
-        from datetime import datetime
-
-        next_idx = None
-        for idx, st in enumerate(parsed_stops):
-            if st["time_iso"]:
-                try:
-                    dt = datetime.fromisoformat(st["time_iso"])
-                    now_tz = datetime.now(dt.tzinfo)
-                    if dt >= now_tz:
-                        next_idx = idx
-                        break
-                except Exception:
-                    pass
-
-        # If all stops are in the past, train is at or approaching final destination
-        if next_idx is None and parsed_stops:
-            next_idx = len(parsed_stops) - 1
-
-        for idx, st in enumerate(parsed_stops):
-            if next_idx is not None:
-                if idx < next_idx:
-                    st["state"] = "passed"
-                elif idx == next_idx:
-                    st["state"] = "next"
-                else:
-                    st["state"] = "upcoming"
-            else:
-                st["state"] = "upcoming"
-
+        # Robust spatial & timeline progress resolution
+        next_idx = _resolve_journey_station_progress(parsed_stops, lat, lng)
         next_stop = parsed_stops[next_idx] if next_idx is not None and next_idx < len(parsed_stops) else None
         current_delay = next_stop["delay_minutes"] if next_stop else 0
 

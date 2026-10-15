@@ -174,6 +174,14 @@
     if (journey) {
       const delayClass = journey.current_delay > 0 ? "delayed" : "ontime";
       const delayText = journey.current_delay > 0 ? `+${journey.current_delay} min vertraging` : "Op tijd";
+      const isAtDest = journey.next_stop && journey.next_stop.at_destination;
+      const isAtStation = journey.next_stop && journey.next_stop.at_station;
+      let nextLabel = "Volgende:";
+      if (isAtDest) {
+        nextLabel = "🏁 Eindpunt:";
+      } else if (isAtStation) {
+        nextLabel = "🚉 Halteert:";
+      }
       const nextStopName = journey.next_stop ? journey.next_stop.name : (journey.destination || "Eindpunt");
       const nextStopTrack = journey.next_stop && journey.next_stop.track ? `<span class="ns-track">Spoor ${journey.next_stop.track}</span>` : "";
 
@@ -185,7 +193,7 @@
             <span>${journey.destination || "—"}</span>
           </div>
           <div class="popup-next-stop">
-            <span>Volgende: <b>${nextStopName}</b></span>
+            <span>${nextLabel} <b>${nextStopName}</b></span>
             ${nextStopTrack}
           </div>
           <div class="popup-status-delay">
@@ -254,7 +262,11 @@
     // 2. Fetch fresh journey if not cached
     if (!cached) {
       try {
-        const r = await fetch(`/api/journey/${trainId}`);
+        let url = `/api/journey/${trainId}`;
+        if (m && m.target) {
+          url += `?lat=${m.target.lat.toFixed(5)}&lng=${m.target.lng.toFixed(5)}`;
+        }
+        const r = await fetch(url);
         if (!r.ok) return;
         const jData = await r.json();
         journeyCache[trainId] = jData;
@@ -265,6 +277,14 @@
           if (box) {
             const delayClass = jData.current_delay > 0 ? "delayed" : "ontime";
             const delayText = jData.current_delay > 0 ? `+${jData.current_delay} min vertraging` : "Op tijd";
+            const isAtDest = jData.next_stop && jData.next_stop.at_destination;
+            const isAtStation = jData.next_stop && jData.next_stop.at_station;
+            let nextLabel = "Volgende:";
+            if (isAtDest) {
+              nextLabel = "🏁 Eindpunt:";
+            } else if (isAtStation) {
+              nextLabel = "🚉 Halteert:";
+            }
             const nextStopName = jData.next_stop ? jData.next_stop.name : (jData.destination || "Eindpunt");
             const nextStopTrack = jData.next_stop && jData.next_stop.track ? `<span class="ns-track">Spoor ${jData.next_stop.track}</span>` : "";
 
@@ -275,7 +295,7 @@
                 <span>${jData.destination || "—"}</span>
               </div>
               <div class="popup-next-stop">
-                <span>Volgende: <b>${nextStopName}</b></span>
+                <span>${nextLabel} <b>${nextStopName}</b></span>
                 ${nextStopTrack}
               </div>
               <div class="popup-status-delay">
@@ -804,7 +824,11 @@
     }
 
     try {
-      const r = await fetch(`/api/journey/${trainId}`);
+      let url = `/api/journey/${trainId}`;
+      if (m && m.target) {
+        url += `?lat=${m.target.lat.toFixed(5)}&lng=${m.target.lng.toFixed(5)}`;
+      }
+      const r = await fetch(url);
       if (!r.ok) throw new Error("Not found");
       const data = await r.json();
       journeyCache[trainId] = data;
@@ -827,15 +851,26 @@
       // Next station highlight banner
       let bannerHtml = "";
       if (data.next_stop) {
+        const isAtDest = data.next_stop.at_destination;
+        const isAtStation = data.next_stop.at_station;
+        let bannerTag = "📍 Volgende station / Next stop";
+        let timeLabel = "Aankomst";
+        if (isAtDest) {
+          bannerTag = "🏁 Eindbestemming bereikt / Terminus";
+          timeLabel = "Aangekomen";
+        } else if (isAtStation) {
+          bannerTag = "🚉 Halteert momenteel te / At Station";
+          timeLabel = "Vertrek";
+        }
         const delayText = data.next_stop.delay_minutes > 0 ? `<span class="ns-delay">+${data.next_stop.delay_minutes} min</span>` : "<span style='color:#00e676;'>Op tijd</span>";
         const trackText = data.next_stop.track ? `<span class="ns-track">Spoor ${data.next_stop.track}</span>` : "";
         bannerHtml = `
-          <div class="next-station-banner">
-            <span class="next-station-tag">📍 Volgende station / Next stop</span>
+          <div class="next-station-banner ${isAtDest ? "at-dest" : ""}">
+            <span class="next-station-tag">${bannerTag}</span>
             <div class="next-station-title">${data.next_stop.name}</div>
             <div class="next-station-meta">
               ${trackText}
-              <span>Aankomst: <b>${data.next_stop.time || "—"}</b></span>
+              <span>${timeLabel}: <b>${data.next_stop.time || "—"}</b></span>
               <span>(${delayText})</span>
             </div>
           </div>
@@ -847,7 +882,16 @@
       data.stops.forEach((s) => {
         const isNext = s.state === "next";
         const itemClass = isNext ? "timeline-item next-stop" : (s.state === "passed" ? "timeline-item passed" : "timeline-item upcoming");
-        const nextBadge = isNext ? `<span class="next-pill">VOLGENDE HALTE</span>` : "";
+        let nextBadge = "";
+        if (isNext) {
+          if (s.at_destination) {
+            nextBadge = `<span class="next-pill dest">EINDPUNT</span>`;
+          } else if (s.at_station) {
+            nextBadge = `<span class="next-pill station">HALTEERT NU</span>`;
+          } else {
+            nextBadge = `<span class="next-pill">VOLGENDE HALTE</span>`;
+          }
+        }
         const delayStr = s.delay_minutes > 0 ? `<span class="timeline-delay">+${s.delay_minutes} min</span>` : "";
         const trackStr = s.track ? `<span class="timeline-track">Spoor ${s.track}</span>` : "";
 
