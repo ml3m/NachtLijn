@@ -1,5 +1,5 @@
 // NachtLijn Service Worker - Offline asset caching & PWA support
-const CACHE_NAME = "nachtlijn-v4";
+const CACHE_NAME = "nachtlijn-v5";
 const STATIC_ASSETS = [
   "/",
   "/static/style.css",

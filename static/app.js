@@ -30,6 +30,8 @@
     markerZoomAnimation: true,
   });
 
+  document.body.classList.toggle("zoom-low", map.getZoom() <= 8);
+
   // Base layers
   const cartoApiKey = "cb1_4kvq_1_6316e1fed1845a6f3132c255";
   
@@ -667,16 +669,27 @@
       }
     }
 
-    // 1. Passed route track: following curved physical railway behind train
+    // 1. Passed route track: following curved physical railway behind train in faded yellow
     const passedCoords = fullRoute.slice(0, splitIdx + 1);
     if (trainPos && splitIdx > 0 && splitIdx < fullRoute.length - 1) {
       passedCoords.push([trainPos.lat, trainPos.lng]);
     }
     if (passedCoords.length >= 2) {
+      // Soft ambient underglow for completed track in faded NS yellow
       L.polyline(passedCoords, {
-        color: "#8fa8cc",
+        color: "rgba(255, 201, 23, 0.22)",
+        weight: 7,
+        opacity: 0.5,
+        lineCap: "round",
+        lineJoin: "round",
+        interactive: false,
+      }).addTo(activeRouteLayer);
+
+      // Core faded yellow dashed polyline representing completed track
+      L.polyline(passedCoords, {
+        color: "#FFC917",
         weight: 3.5,
-        opacity: 0.42,
+        opacity: 0.60,
         dashArray: "6, 8",
         lineCap: "round",
         lineJoin: "round",
@@ -713,33 +726,77 @@
       }).addTo(activeRouteLayer);
     }
 
-    // 3. Station waypoints along the route path
+    // 3. Station waypoints along the route path (distinct visual hierarchy for route stops)
     stops.forEach((s, idx) => {
-      const isPast = idx < activeIdx;
-      const isNext = idx === activeIdx;
-      const isDest = idx === stops.length - 1;
+      if (s.lat == null || s.lng == null) return;
 
-      // Color coding: destination = emerald green, next = matching train color, past = muted slate, upcoming = crisp white
-      const fillColor = isDest ? "#00e676" : (isNext ? color : (isPast ? "#5577aa" : "#ffffff"));
-      const radius = isNext ? 6.5 : (isDest ? 5.5 : 4);
+      const isPast = (s.state === "passed") || (activeIdx !== -1 && idx < activeIdx);
+      const isNext = (s.state === "next") || (idx === activeIdx);
+      const isOrigin = (idx === 0);
+      const isDest = (idx === stops.length - 1);
 
-      const circle = L.circleMarker([s.lat, s.lng], {
-        radius: radius,
-        fillColor: fillColor,
-        color: isNext ? "#ffffff" : "#0d1b2a",
-        weight: isNext ? 2.5 : 1.5,
-        fillOpacity: 1,
-        className: isNext ? "pulse-stop-marker" : "",
+      let stateClass = "upcoming";
+      if (isDest) stateClass = "dest";
+      else if (isNext) stateClass = "next";
+      else if (isPast) stateClass = "passed";
+      else if (isOrigin) stateClass = "origin";
+
+      let iconSymbol = "";
+      if (isDest) iconSymbol = "🏁";
+      else if (isNext) iconSymbol = "📍";
+      else if (isOrigin) iconSymbol = "🛫";
+      else if (isPast) iconSymbol = "✓";
+
+      const timeStr = s.time ? s.time : "";
+      const trackStr = s.track ? `Sp. ${s.track}` : "";
+      const delayBadge = s.delay_minutes > 0 ? `<span class="pill-delay">+${s.delay_minutes}m</span>` : "";
+
+      const icon = L.divIcon({
+        className: `route-station-marker ${stateClass}`,
+        html: `
+          <div class="route-station-wrap ${stateClass}">
+            ${isNext ? '<div class="route-station-pulse-ring"></div>' : ''}
+            <div class="route-station-dot ${stateClass}">
+              ${iconSymbol ? `<span class="route-dot-symbol">${iconSymbol}</span>` : ''}
+            </div>
+            <div class="route-station-pill ${stateClass}" title="${s.name} (${s.time || '—'}${s.track ? ' · Spoor ' + s.track : ''})">
+              <span class="route-pill-name">${s.name}</span>
+              ${timeStr || trackStr ? `<span class="route-pill-meta">${[timeStr, trackStr].filter(Boolean).join(" · ")}${delayBadge}</span>` : ''}
+            </div>
+          </div>
+        `,
+        iconSize: [24, 24],
+        iconAnchor: [12, 12],
       });
 
-      const delayInfo = s.delay_minutes > 0 ? ` (+${s.delay_minutes} min)` : "";
-      circle.bindTooltip(`<b>${s.name}</b><br/>${s.time || "—"}${delayInfo}${s.track ? ` · Spoor ${s.track}` : ""}`, {
+      const stopMarker = L.marker([s.lat, s.lng], {
+        icon: icon,
+        zIndexOffset: isNext ? 1800 : (isDest || isOrigin ? 1600 : (isPast ? 1200 : 1400)),
+      });
+
+      const delayInfo = s.delay_minutes > 0 ? ` (+${s.delay_minutes} min vertraging)` : "";
+      const statusDesc = isPast ? "Reeds gepasseerd ✓" : (isNext ? "Volgende halte 🚉" : (isDest ? "Eindbestemming 🏁" : (isOrigin ? "Beginstation 🛫" : "Geplande stop")));
+      stopMarker.bindTooltip(`
+        <div style="font-family:'Segoe UI',sans-serif;font-size:12px;line-height:1.4;padding:2px 4px;">
+          <div style="font-weight:800;color:#ffffff;font-size:13px;margin-bottom:3px;">${s.name}</div>
+          <div style="color:#FFC917;font-weight:700;">${statusDesc}</div>
+          <div style="color:#c5d5ea;font-size:11px;">Tijd: <b>${s.time || "—"}</b>${delayInfo}</div>
+          ${s.track ? `<div style="color:#8fa8cc;font-size:11px;">Spoor: <b style="color:#ffffff;">Spoor ${s.track}</b></div>` : ''}
+        </div>
+      `, {
         direction: "top",
-        offset: [0, -6],
+        offset: [0, -14],
         className: "route-stop-tooltip",
       });
 
-      circle.addTo(activeRouteLayer);
+      stopMarker.on("click", (e) => {
+        if (e && e.originalEvent) e.originalEvent.stopPropagation();
+        if (s.code && typeof window.focusStation === "function") {
+          window.focusStation(s.code);
+        }
+      });
+
+      stopMarker.addTo(activeRouteLayer);
     });
 
     activeRouteData = { trainId, journey, fullRoute, lastUpdatePos: trainPos ? { lat: trainPos.lat, lng: trainPos.lng } : null };
@@ -1461,6 +1518,7 @@
   $stationCb.addEventListener("change", syncToggleLayers);
 
   map.on("zoomend", () => {
+    document.body.classList.toggle("zoom-low", map.getZoom() <= 8);
     if (stationsVisible && map.getZoom() >= 7) showStations();
     else hideStations();
   });

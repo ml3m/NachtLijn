@@ -1317,27 +1317,230 @@ html, body, #map { width: 100%; height: 100%; overflow: hidden; font-family: 'Se
 .leaflet-control-layers label:hover { color: #4a9eff; }
 
 /* ── Active Route Layer Styling ────────────────────────────────── */
-.route-stop-tooltip {
-  background: rgba(0, 20, 56, 0.94) !important;
-  border: 1px solid rgba(255, 201, 23, 0.5) !important;
-  color: #ffffff !important;
-  font-size: 11px !important;
-  border-radius: 5px !important;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6) !important;
-  padding: 4px 8px !important;
-  line-height: 1.35 !important;
-}
-.route-stop-tooltip::before {
-  border-top-color: rgba(255, 201, 23, 0.5) !important;
+.route-station-marker {
+  z-index: 1400 !important;
+  overflow: visible !important;
+  cursor: pointer !important;
 }
 
-.pulse-stop-marker {
-  animation: pulse-stop-glow 1.6s infinite ease-in-out;
+.route-station-wrap {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  overflow: visible;
 }
-@keyframes pulse-stop-glow {
-  0% { filter: drop-shadow(0 0 2px #FFC917); }
-  50% { filter: drop-shadow(0 0 8px #FFC917); }
-  100% { filter: drop-shadow(0 0 2px #FFC917); }
+
+.route-station-pulse-ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  margin-top: -22px;
+  margin-left: -22px;
+  border-radius: 50%;
+  border: 2px solid var(--ns-yellow);
+  pointer-events: none;
+  animation: route-station-pulse 1.7s infinite cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes route-station-pulse {
+  0% { transform: scale(0.4); opacity: 1; box-shadow: 0 0 6px rgba(255, 201, 23, 0.95); }
+  60% { transform: scale(1.5); opacity: 0.5; box-shadow: 0 0 14px rgba(255, 201, 23, 0.6); }
+  100% { transform: scale(2.2); opacity: 0; box-shadow: 0 0 20px rgba(255, 201, 23, 0); }
+}
+
+.route-station-dot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  z-index: 2;
+}
+
+.route-dot-symbol {
+  font-size: 8.5px;
+  line-height: 1;
+  pointer-events: none;
+}
+
+/* Upcoming intermediate stop */
+.route-station-dot.upcoming {
+  width: 12px;
+  height: 12px;
+  background: #ffffff;
+  border: 2px solid var(--ns-yellow);
+  box-shadow: 0 0 10px rgba(255, 201, 23, 0.8), 0 0 4px rgba(0, 0, 0, 0.8);
+}
+
+/* Next upcoming stop (active target) */
+.route-station-dot.next {
+  width: 16px;
+  height: 16px;
+  background: var(--ns-yellow);
+  border: 2.5px solid #ffffff;
+  color: var(--ns-blue);
+  box-shadow: 0 0 18px rgba(255, 201, 23, 1), 0 0 8px rgba(0, 0, 0, 0.9);
+  animation: route-dot-next-glow 1.8s infinite ease-in-out;
+}
+
+@keyframes route-dot-next-glow {
+  0%, 100% { transform: translate(-50%, -50%) scale(1); box-shadow: 0 0 14px rgba(255, 201, 23, 0.9); }
+  50% { transform: translate(-50%, -50%) scale(1.15); box-shadow: 0 0 24px rgba(255, 201, 23, 1), 0 0 10px #ffffff; }
+}
+
+/* Passed stop (completed track) */
+.route-station-dot.passed {
+  width: 11px;
+  height: 11px;
+  background: rgba(0, 20, 56, 0.9);
+  border: 1.5px solid rgba(255, 201, 23, 0.75);
+  color: #FFC917;
+  box-shadow: 0 0 6px rgba(255, 201, 23, 0.4);
+}
+.route-station-dot.passed .route-dot-symbol {
+  font-size: 7.5px;
+  font-weight: 800;
+}
+
+/* Origin station */
+.route-station-dot.origin {
+  width: 14px;
+  height: 14px;
+  background: rgba(0, 20, 56, 0.95);
+  border: 2px solid var(--ns-yellow);
+  color: var(--ns-yellow);
+  box-shadow: 0 0 10px rgba(255, 201, 23, 0.7);
+}
+
+/* Destination station */
+.route-station-dot.dest {
+  width: 15px;
+  height: 15px;
+  background: rgba(0, 230, 118, 0.2);
+  border: 2.5px solid #00e676;
+  color: #00e676;
+  box-shadow: 0 0 16px rgba(0, 230, 118, 0.8), 0 0 6px rgba(0, 0, 0, 0.8);
+}
+
+/* ── Floating Station Label Pills ───────────────────────────────── */
+.route-station-pill {
+  position: absolute;
+  left: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 2.5px 7px;
+  border-radius: 6px;
+  background: rgba(0, 20, 56, 0.94);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 201, 23, 0.45);
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.75), 0 0 8px rgba(0, 48, 130, 0.4);
+  pointer-events: auto;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  transition: opacity 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
+  z-index: 5;
+}
+
+.route-station-pill:hover {
+  border-color: var(--ns-yellow);
+  background: rgba(0, 32, 96, 0.98);
+  transform: translateY(-50%) scale(1.05);
+}
+
+.route-pill-name {
+  font-weight: 800;
+  color: #ffffff;
+}
+
+.route-pill-meta {
+  font-size: 9.5px;
+  font-weight: 600;
+  color: #8fa8cc;
+  border-left: 1px solid rgba(255, 255, 255, 0.15);
+  padding-left: 4px;
+}
+
+.route-station-pill .pill-delay {
+  color: #ff4455;
+  font-weight: 800;
+  margin-left: 2px;
+}
+
+.route-station-pill.next {
+  border: 1.5px solid var(--ns-yellow);
+  background: rgba(0, 30, 85, 0.98);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.85), 0 0 14px rgba(255, 201, 23, 0.7);
+}
+.route-station-pill.next .route-pill-name {
+  color: var(--ns-yellow);
+}
+
+.route-station-pill.dest {
+  border: 1.5px solid #00e676;
+}
+.route-station-pill.dest .route-pill-name {
+  color: #00e676;
+}
+
+.route-station-pill.passed {
+  border-color: rgba(255, 201, 23, 0.25);
+  background: rgba(0, 15, 40, 0.88);
+  color: #8fa8cc;
+}
+.route-station-pill.passed .route-pill-name {
+  color: #b0c4de;
+}
+
+body.zoom-low .route-station-marker.upcoming .route-station-pill,
+body.zoom-low .route-station-marker.passed .route-station-pill {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%) translateX(-4px);
+}
+
+body.zoom-low .route-station-marker:hover .route-station-pill {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  transform: translateY(-50%) translateX(0) !important;
+}
+
+.route-station-marker.next .route-station-pill,
+.route-station-marker.origin .route-station-pill,
+.route-station-marker.dest .route-station-pill {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+
+.route-stop-tooltip {
+  background: rgba(0, 20, 56, 0.96) !important;
+  border: 1.5px solid rgba(255, 201, 23, 0.6) !important;
+  color: #ffffff !important;
+  font-size: 11px !important;
+  border-radius: 8px !important;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.8), 0 0 10px rgba(255, 201, 23, 0.4) !important;
+  padding: 6px 10px !important;
+  line-height: 1.4 !important;
+}
+.route-stop-tooltip::before {
+  border-top-color: rgba(255, 201, 23, 0.6) !important;
 }
 
 /* ── Cockpit Telemetry HUD Widget ───────────────────────────────── */
