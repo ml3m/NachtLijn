@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NachtLijn – Live Spoorradar & Treinvolger</title>
+  <link rel="icon" type="image/png" href="/static/logo.png" />
+  <link rel="apple-touch-icon" href="/static/logo.png" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+<div id="map"></div>
+
+<!-- Glass HUD Panel -->
+<div id="hud">
+  <div class="hud-header">
+    <div class="brand-wrap">
+      <img src="/static/logo.png" alt="NachtLijn Logo" class="brand-logo" />
+      <div class="brand-titles">
+        <div class="brand-name"><span class="brand-nacht">Nacht</span><span class="brand-lijn">Lijn</span></div>
+        <div class="brand-tagline">Live Spoorradar</div>
+      </div>
+    </div>
+    <div class="header-status-group">
+      <span id="feed-badge" class="feed-badge" title="Live push feed via NDOV ZeroMQ">Live Push</span>
+      <span class="status-dot live" id="status-dot" title="Systeem Live"></span>
+    </div>
+  </div>
+
+  <div class="hud-row main-stat">
+    <span class="label">Total Trains</span>
+    <span class="value" id="train-count">—</span>
+  </div>
+
+  <!-- Train Category Filter Buttons & Breakdown -->
+  <div class="filter-row">
+    <button class="filter-pill active" id="filter-ic" data-type="IC" title="Toggle Intercity trains">
+      <span class="indicator ic"></span>
+      <span class="pill-name">IC</span>
+      <span class="pill-count" id="count-ic">0</span>
+    </button>
+    <button class="filter-pill active" id="filter-spr" data-type="SPR" title="Toggle Sprinter trains">
+      <span class="indicator spr"></span>
+      <span class="pill-name">SPR</span>
+      <span class="pill-count" id="count-spr">0</span>
+    </button>
+    <button class="filter-pill active" id="filter-other" data-type="other" title="Toggle International / Other trains">
+      <span class="indicator other"></span>
+      <span class="pill-name">Other</span>
+      <span class="pill-count" id="count-other">0</span>
+    </button>
+  </div>
+
+  <!-- Polling Countdown -->
+  <div class="hud-row update-row">
+    <span class="label">Next update</span>
+    <div id="countdown-wrap">
+      <svg id="countdown-ring" width="32" height="32" viewBox="0 0 36 36">
+        <circle class="bg" cx="18" cy="18" r="15.5" />
+        <circle class="fg" id="ring-fg" cx="18" cy="18" r="15.5"
+                stroke-dasharray="97.4" stroke-dashoffset="0" />
+      </svg>
+      <span id="countdown-text">—</span>
+    </div>
+  </div>
+
+  <!-- Search Input -->
+  <div id="search-wrap">
+    <span id="search-icon">🔍</span>
+    <input id="search-input" type="text" placeholder="Train nr (e.g. 3583)…" inputmode="numeric" />
+    <div id="search-feedback"></div>
+  </div>
+
+  <!-- Toggles -->
+  <div class="toggles-container">
+    <label class="toggle-item">
+      <input type="checkbox" id="border-cb" checked />
+      <span>🇳🇱 National border outline</span>
+    </label>
+    <label class="toggle-item">
+      <input type="checkbox" id="trails-cb" checked />
+      <span>Motion trails (glow wakes)</span>
+    </label>
+    <label class="toggle-item">
+      <input type="checkbox" id="stations-cb" checked />
+      <span>Stations & departure boards (zoom ≥ 7)</span>
+    </label>
+    <label class="toggle-item">
+      <input type="checkbox" id="disruptions-cb" checked />
+      <span id="disruptions-label">🚨 Rail disruptions (loading…)</span>
+    </label>
+  </div>
+</div>
+
+<!-- Slide-out Journey Timeline Drawer -->
+<div id="journey-drawer" class="drawer-closed">
+  <div class="drawer-header">
+    <div class="drawer-title-wrap">
+      <span class="drawer-badge" id="drawer-badge">IC</span>
+      <div>
+        <h2 id="drawer-title">Train Details</h2>
+        <div class="drawer-sub" id="drawer-sub">Select a train to inspect stops</div>
+      </div>
+    </div>
+    <button id="drawer-close-btn" class="drawer-close" title="Close Drawer">&times;</button>
+  </div>
+
+  <div class="drawer-content">
+    <div id="drawer-stock" class="stock-card" style="display:none;"></div>
+    <div class="timeline-wrapper">
+      <div class="timeline-header">Timetable & Intermediate Stops</div>
+      <div id="drawer-timeline" class="timeline-list">
+        <div class="timeline-empty">Click any train marker and select "View Journey"</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
