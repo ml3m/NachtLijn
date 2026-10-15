@@ -104,6 +104,19 @@
   const $drawerTimeline = document.getElementById("drawer-timeline");
   const $drawerFollow   = document.getElementById("drawer-follow-btn");
 
+  // Cockpit Telemetry HUD elements
+  const $cockpitHud       = document.getElementById("cockpit-hud");
+  const $cockpitBadge     = document.getElementById("cockpit-badge");
+  const $cockpitTrainNum  = document.getElementById("cockpit-train-num");
+  const $cockpitRoute     = document.getElementById("cockpit-route");
+  const $cockpitSpeedNum  = document.getElementById("cockpit-speed-num");
+  const $cockpitHeading   = document.getElementById("cockpit-heading");
+  const $cockpitNextName  = document.getElementById("cockpit-next-name");
+  const $cockpitDistance  = document.getElementById("cockpit-distance");
+  const $cockpitStopBtn   = document.getElementById("cockpit-stop-btn");
+  const $cockpitJourneyBtn= document.getElementById("cockpit-journey-btn");
+  const $cockpitInfoClick = document.getElementById("cockpit-info-click");
+
   // ── State ────────────────────────────────────────────────────────
   const activeRouteLayer = L.layerGroup().addTo(map);
   let followedTrainId = null;
@@ -526,7 +539,14 @@
     });
   }
 
+  function hideCockpitHUD() {
+    if ($cockpitHud) $cockpitHud.classList.remove("active");
+  }
+
   function updateFollowButtons() {
+    if (followedTrainId === null) {
+      hideCockpitHUD();
+    }
     if (openPopupId !== null) {
       const btn = document.getElementById(`follow-btn-${openPopupId}`);
       if (btn) {
@@ -553,6 +573,7 @@
   window.toggleFollowTrain = function (trainId) {
     if (followedTrainId === trainId) {
       followedTrainId = null;
+      hideCockpitHUD();
     } else {
       followedTrainId = trainId;
       activeSelectedTrainId = trainId;
@@ -560,10 +581,121 @@
       if (m) {
         const p = m.displayed || m.target;
         map.panTo([p.lat, p.lng], { animate: true, duration: 0.6 });
+        updateCockpitHUD(m);
       }
     }
     updateFollowButtons();
   };
+
+  function updateCockpitHUD(m) {
+    if (!$cockpitHud || !m) return;
+    $cockpitHud.classList.add("active");
+
+    const cat = trainCategory(m.type);
+    if ($cockpitBadge) {
+      $cockpitBadge.textContent = cat.toUpperCase();
+      $cockpitBadge.className = `cockpit-badge ${cat}`;
+    }
+    if ($cockpitTrainNum) {
+      $cockpitTrainNum.textContent = `Trein ${m.id}`;
+    }
+
+    if ($cockpitSpeedNum) {
+      const spd = Math.round(m.speed || 0);
+      $cockpitSpeedNum.textContent = String(spd);
+      if (spd >= 100) {
+        $cockpitSpeedNum.classList.add("high-speed");
+      } else {
+        $cockpitSpeedNum.classList.remove("high-speed");
+      }
+    }
+
+    if ($cockpitHeading) {
+      const hdg = Math.round(m.heading || 0);
+      $cockpitHeading.textContent = `🧭 ${hdg}° · ${headingToCompass(hdg)}`;
+    }
+
+    const j = journeyCache[m.id];
+    if (j) {
+      if ($cockpitRoute) {
+        const orig = j.origin || "";
+        const dest = j.destination || "";
+        $cockpitRoute.textContent = (orig && dest) ? `${orig} ➔ ${dest}` : (dest || "Onderweg");
+      }
+
+      if (j.next_stop) {
+        const ns = j.next_stop;
+        if ($cockpitNextName) {
+          const trk = ns.track ? ` (Sp. ${ns.track})` : "";
+          $cockpitNextName.textContent = `${ns.name}${trk}`;
+        }
+
+        if ($cockpitDistance) {
+          if (ns.at_destination) {
+            $cockpitDistance.textContent = "🏁 Eindpunt bereikt";
+            $cockpitDistance.style.color = "#FFC917";
+          } else if (ns.at_station) {
+            $cockpitDistance.textContent = "🚉 Halteert op station";
+            $cockpitDistance.style.color = "#00e676";
+          } else if (ns.lat && ns.lng && m.displayed) {
+            const distM = distanceMeters(m.displayed.lat, m.displayed.lng, ns.lat, ns.lng);
+            const distKm = distM / 1000;
+            const distStr = distKm < 1 ? `${Math.round(distM)} m` : `${distKm.toFixed(1)} km`;
+            const dMin = ns.delay_minutes > 0 ? ` (+${ns.delay_minutes}m)` : "";
+            $cockpitDistance.textContent = `📍 nog ${distStr}${dMin}`;
+            $cockpitDistance.style.color = "#00e676";
+          } else if (ns.time) {
+            $cockpitDistance.textContent = `Aankomst: ${ns.time}`;
+            $cockpitDistance.style.color = "#8fa8cc";
+          }
+        }
+      } else {
+        if ($cockpitNextName) $cockpitNextName.textContent = "—";
+        if ($cockpitDistance) $cockpitDistance.textContent = "";
+      }
+    } else {
+      if ($cockpitRoute) $cockpitRoute.textContent = "Dienstregeling laden…";
+      if ($cockpitNextName) $cockpitNextName.textContent = "—";
+      if ($cockpitDistance) $cockpitDistance.textContent = "";
+      if (!m._fetchingJourney) {
+        m._fetchingJourney = true;
+        fetchJourneyForCache(m.id, m.displayed || m.target);
+      }
+    }
+  }
+
+  async function fetchJourneyForCache(trainId, pos) {
+    try {
+      let url = `/api/journey/${trainId}`;
+      if (pos && pos.lat) url += `?lat=${pos.lat.toFixed(5)}&lng=${pos.lng.toFixed(5)}`;
+      const r = await fetch(url);
+      if (r.ok) {
+        journeyCache[trainId] = await r.json();
+      }
+    } catch (_) {}
+  }
+
+  if ($cockpitStopBtn) {
+    $cockpitStopBtn.addEventListener("click", () => {
+      if (followedTrainId !== null) {
+        window.toggleFollowTrain(followedTrainId);
+      }
+    });
+  }
+  if ($cockpitJourneyBtn) {
+    $cockpitJourneyBtn.addEventListener("click", () => {
+      if (followedTrainId !== null) {
+        window.openJourney(followedTrainId);
+      }
+    });
+  }
+  if ($cockpitInfoClick) {
+    $cockpitInfoClick.addEventListener("click", () => {
+      if (followedTrainId !== null) {
+        window.openJourney(followedTrainId);
+      }
+    });
+  }
 
   // ── Geo math ─────────────────────────────────────────────────────
   function distanceMeters(lat1, lng1, lat2, lng2) {
@@ -1702,6 +1834,7 @@
       // If user is following this train, pan map camera along smoothly
       if (followedTrainId !== null && Number(id) === followedTrainId) {
         map.panTo([lat, lng], { animate: false });
+        updateCockpitHUD(m);
       }
 
       // Keep motion trail synced with head
@@ -1719,6 +1852,12 @@
         const elPos = document.getElementById(`live-pos-${m.id}`);
         if (elPos) elPos.textContent = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
       }
+    }
+
+    if (followedTrainId !== null && !markers[followedTrainId]) {
+      followedTrainId = null;
+      updateFollowButtons();
+      hideCockpitHUD();
     }
 
     requestAnimationFrame(animate);

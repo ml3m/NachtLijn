@@ -139,6 +139,37 @@
   </div>
 </div>
 
+<!-- Cockpit Telemetry HUD (Active during Follow Mode) -->
+<div id="cockpit-hud" class="cockpit-hud">
+  <div class="cockpit-left" id="cockpit-info-click" title="Klik om dienstregeling te bekijken">
+    <div class="cockpit-train-line">
+      <span class="cockpit-badge" id="cockpit-badge">IC</span>
+      <span class="cockpit-train-num" id="cockpit-train-num">Trein ----</span>
+      <span class="cockpit-pulse-dot" title="Live GPS & Spoor Synchronisatie"></span>
+    </div>
+    <div class="cockpit-route" id="cockpit-route">Bestemming laden…</div>
+  </div>
+
+  <div class="cockpit-center">
+    <div class="cockpit-speed-box">
+      <span class="cockpit-speed-num" id="cockpit-speed-num">0</span>
+      <span class="cockpit-speed-unit">km/h</span>
+    </div>
+    <div class="cockpit-heading" id="cockpit-heading">🧭 --° · --</div>
+  </div>
+
+  <div class="cockpit-right">
+    <div class="cockpit-next-label">VOLGENDE HALTE</div>
+    <div class="cockpit-next-name" id="cockpit-next-name">—</div>
+    <div class="cockpit-distance" id="cockpit-distance">Afstand berekenen…</div>
+  </div>
+
+  <div class="cockpit-actions">
+    <button id="cockpit-journey-btn" class="cockpit-btn journey" title="Bekijk volledige dienstregeling">📜 Dienstregeling</button>
+    <button id="cockpit-stop-btn" class="cockpit-btn stop" title="Stop camera volgen">⏹️ Stop</button>
+  </div>
+</div>
+
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="/static/app.js"></script>
 </body>
