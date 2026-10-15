@@ -494,6 +494,140 @@ html, body, #map { width: 100%; height: 100%; overflow: hidden; font-family: 'Se
   pointer-events: none;
 }
 
+/* ── Selected Train Marker Highlight ────────────────────────────── */
+.train-icon.selected-train {
+  z-index: 2500 !important;
+  overflow: visible !important;
+}
+
+.train-selected-halo {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  overflow: visible;
+}
+
+.selected-pulse-ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 50px;
+  height: 50px;
+  margin-top: -25px;
+  margin-left: -25px;
+  border-radius: 50%;
+  border: 2px solid var(--ns-yellow);
+  pointer-events: none;
+  animation: selected-train-radar 1.8s infinite cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.selected-pulse-ring.pulse-2 {
+  animation-delay: 0.9s;
+}
+
+@keyframes selected-train-radar {
+  0% {
+    transform: scale(0.5);
+    opacity: 1;
+    box-shadow: 0 0 6px rgba(255, 201, 23, 0.9);
+  }
+  65% {
+    transform: scale(1.6);
+    opacity: 0.5;
+    box-shadow: 0 0 16px rgba(255, 201, 23, 0.7);
+  }
+  100% {
+    transform: scale(2.3);
+    opacity: 0;
+    box-shadow: 0 0 24px rgba(255, 201, 23, 0);
+  }
+}
+
+.selected-target-ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 34px;
+  height: 34px;
+  margin-top: -17px;
+  margin-left: -17px;
+  border-radius: 50%;
+  background: rgba(0, 32, 96, 0.7);
+  border: 2px solid var(--ns-yellow);
+  box-shadow: 0 0 16px rgba(255, 201, 23, 0.9), inset 0 0 10px rgba(255, 201, 23, 0.5);
+  pointer-events: none;
+  animation: selected-target-glow 2s infinite ease-in-out;
+}
+
+@keyframes selected-target-glow {
+  0%, 100% {
+    box-shadow: 0 0 12px rgba(255, 201, 23, 0.8), inset 0 0 8px rgba(255, 201, 23, 0.4);
+    border-color: #FFC917;
+  }
+  50% {
+    box-shadow: 0 0 22px rgba(255, 201, 23, 1), inset 0 0 14px rgba(255, 201, 23, 0.7);
+    border-color: #ffffff;
+  }
+}
+
+.selected-train-pill {
+  position: absolute;
+  bottom: 32px;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 800;
+  color: #ffffff;
+  background: rgba(0, 20, 56, 0.95);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1.5px solid var(--ns-yellow);
+  border-radius: 12px;
+  padding: 2px 7px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.85), 0 0 12px rgba(255, 201, 23, 0.6);
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  z-index: 10;
+  letter-spacing: 0.3px;
+  animation: selected-pill-bounce 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes selected-pill-bounce {
+  0% { transform: translateX(-50%) translateY(6px) scale(0.9); opacity: 0; }
+  100% { transform: translateX(-50%) translateY(0) scale(1); opacity: 1; }
+}
+
+.selected-train-pill .pill-badge {
+  font-size: 9px;
+  font-weight: 800;
+  padding: 1px 5px;
+  border-radius: 3px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.selected-train-pill .pill-badge.IC {
+  background: var(--ns-yellow);
+  color: var(--ns-blue);
+}
+
+.selected-train-pill .pill-badge.SPR {
+  background: var(--ns-sprinter);
+  color: #ffffff;
+}
+
+.selected-train-pill .pill-badge.other {
+  background: var(--ns-other);
+  color: #ffffff;
+}
+
 /* ── Rich Train Card Popup (Dark Glass) ────────────────────────── */
 .leaflet-popup-content-wrapper {
   background: rgba(0, 20, 56, 0.95) !important;

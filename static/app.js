@@ -85,8 +85,9 @@
   });
 
   map.on("click", () => {
-    if (activeDockTrainId !== null) {
+    if (activeDockTrainId !== null || activeSelectedTrainId !== null) {
       closeTrainDock();
+      setSelectedTrain(null);
     }
   });
 
@@ -330,12 +331,65 @@
     return type || "Trein";
   }
 
-  // SVG chevron builder with enlarged click hit-area
-  function chevronSVG(color, heading) {
-    return `<div class="train-chevron-wrap" style="transform:rotate(${heading}deg);width:100%;height:100%;display:flex;align-items:center;justify-content:center;pointer-events:auto;">` +
-      `<svg viewBox="0 0 24 24" width="20" height="20" style="filter:drop-shadow(0 0 4px rgba(0,0,0,0.9));pointer-events:none;">` +
-      `<path d="M12 2 L20 18 L12 14 L4 18 Z" fill="${color}" stroke="#000000" stroke-width="1.2" stroke-linejoin="round"/>` +
-      `</svg></div>`;
+  // SVG chevron builder with enlarged click hit-area & dynamic selection state
+  function chevronSVG(color, heading, isSelected, trainObj) {
+    const rot = (heading !== undefined && heading !== null) ? heading : 0;
+    if (!isSelected) {
+      return (
+        `<div class="train-chevron-wrap" style="transform:rotate(${rot}deg);width:100%;height:100%;display:flex;align-items:center;justify-content:center;pointer-events:auto;">` +
+        `<svg viewBox="0 0 24 24" width="20" height="20" style="filter:drop-shadow(0 0 4px rgba(0,0,0,0.9));pointer-events:none;">` +
+        `<path d="M12 2 L20 18 L12 14 L4 18 Z" fill="${color}" stroke="#000000" stroke-width="1.2" stroke-linejoin="round"/>` +
+        `</svg></div>`
+      );
+    }
+
+    const type = (trainObj && trainObj.type) || "";
+    const id = (trainObj && trainObj.id) || "";
+    const cat = trainCategory(type);
+    const catBadge = cat.toUpperCase();
+
+    return (
+      `<div class="train-selected-halo">` +
+      `<div class="selected-pulse-ring pulse-1"></div>` +
+      `<div class="selected-pulse-ring pulse-2"></div>` +
+      `<div class="selected-target-ring"></div>` +
+      (id ? `<div class="selected-train-pill"><span class="pill-badge ${cat}">${catBadge}</span> <span>${id}</span></div>` : "") +
+      `<div class="train-chevron-wrap selected" style="transform:rotate(${rot}deg);width:100%;height:100%;display:flex;align-items:center;justify-content:center;pointer-events:auto;">` +
+      `<svg viewBox="0 0 24 24" width="26" height="26" style="filter:drop-shadow(0 0 8px ${color}) drop-shadow(0 0 16px rgba(255,201,23,0.95));pointer-events:none;">` +
+      `<path d="M12 2 L20 18 L12 14 L4 18 Z" fill="${color}" stroke="#FFFFFF" stroke-width="2.0" stroke-linejoin="round"/>` +
+      `</svg></div>` +
+      `</div>`
+    );
+  }
+
+  function updateTrainMarkerAppearance(trainId, isSelected) {
+    const m = markers[trainId];
+    if (!m || !m.marker) return;
+    const color = trainColor(m.type);
+    const el = m.marker.getElement();
+    if (el) {
+      el.innerHTML = chevronSVG(color, m.heading, isSelected, m);
+      if (isSelected) {
+        el.classList.add("selected-train");
+        m.marker.setZIndexOffset(2500);
+      } else {
+        el.classList.remove("selected-train");
+        m.marker.setZIndexOffset(20);
+      }
+    }
+  }
+
+  function setSelectedTrain(trainId) {
+    const prevId = activeSelectedTrainId;
+    activeSelectedTrainId = trainId;
+
+    if (prevId !== null && prevId !== trainId && markers[prevId]) {
+      updateTrainMarkerAppearance(prevId, false);
+    }
+
+    if (trainId !== null && markers[trainId]) {
+      updateTrainMarkerAppearance(trainId, true);
+    }
   }
 
   // ── Rich Train Card Builder ──────────────────────────────────────
@@ -444,7 +498,7 @@
 
     activeDockTrainId = trainId;
     openPopupId = trainId;
-    activeSelectedTrainId = trainId;
+    setSelectedTrain(trainId);
     const m = markers[trainId];
     if (!m) return;
 
@@ -522,7 +576,7 @@
     if ($drawer.classList.contains("drawer-closed")) {
       if (followedTrainId === null) {
         activeRouteLayer.clearLayers();
-        activeSelectedTrainId = null;
+        setSelectedTrain(null);
         activeRouteData = null;
       }
     }
@@ -728,9 +782,14 @@
     if (followedTrainId === trainId) {
       followedTrainId = null;
       hideCockpitHUD();
+      if ($drawer.classList.contains("drawer-closed") && activeDockTrainId === null) {
+        activeRouteLayer.clearLayers();
+        setSelectedTrain(null);
+        activeRouteData = null;
+      }
     } else {
       followedTrainId = trainId;
-      activeSelectedTrainId = trainId;
+      setSelectedTrain(trainId);
       playNSChime();
       const m = markers[trainId];
       if (m) {
@@ -1769,7 +1828,7 @@
 
   // ── Journey Timeline Drawer ──────────────────────────────────────
   window.openJourney = async function (trainId) {
-    activeSelectedTrainId = trainId;
+    setSelectedTrain(trainId);
     updateUrlParam("train", trainId);
     playNSChime();
     $drawer.classList.remove("drawer-closed");
@@ -1917,7 +1976,7 @@
     updateUrlParam("train", null);
     if (activeDockTrainId === null && openPopupId === null) {
       activeRouteLayer.clearLayers();
-      activeSelectedTrainId = null;
+      setSelectedTrain(null);
       activeRouteData = null;
     }
     if (followedTrainId && followedTrainId === activeSelectedTrainId) {
@@ -2169,15 +2228,26 @@
           }
         }
 
+        const isSel = (activeSelectedTrainId === t.id);
         const el = existing.marker.getElement();
-        if (el) el.innerHTML = chevronSVG(color, t.heading);
+        if (el) {
+          el.innerHTML = chevronSVG(color, t.heading, isSel, t);
+          if (isSel) {
+            el.classList.add("selected-train");
+            existing.marker.setZIndexOffset(2500);
+          } else {
+            el.classList.remove("selected-train");
+            existing.marker.setZIndexOffset(20);
+          }
+        }
       } else {
+        const isSel = (activeSelectedTrainId === t.id);
         const icon = L.divIcon({
-          className: "train-icon",
-          html: chevronSVG(color, t.heading),
+          className: isSel ? "train-icon selected-train" : "train-icon",
+          html: chevronSVG(color, t.heading, isSel, t),
           iconSize: [28, 28],
         });
-        const marker = L.marker([targetPos.lat, targetPos.lng], { icon, zIndexOffset: 20 });
+        const marker = L.marker([targetPos.lat, targetPos.lng], { icon, zIndexOffset: isSel ? 2500 : 20 });
 
         // Motion trail polyline: only spawn wake if train is actively running
         let history = [];
@@ -2202,9 +2272,11 @@
 
         marker.on("click", (e) => {
           if (e && e.originalEvent) e.originalEvent.stopPropagation();
-          if (activeDockTrainId === t.id && $trainDock && $trainDock.classList.contains("open")) {
+          if (activeSelectedTrainId === t.id && $trainDock && $trainDock.classList.contains("open")) {
             closeTrainDock();
+            setSelectedTrain(null);
           } else {
+            setSelectedTrain(t.id);
             openTrainPopup(t.id);
           }
         });
