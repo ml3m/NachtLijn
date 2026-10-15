@@ -1976,7 +1976,32 @@
       const targetPos = { lat: snap.lat, lng: snap.lng };
 
       if (existing) {
-        if (isNewServerFix) {
+        const prevDisp = existing.displayed || existing.target;
+        const jumpDist = distanceMeters(prevDisp.lat, prevDisp.lng, targetPos.lat, targetPos.lng);
+        const dtSec = Math.max(0.1, (now - existing.lastSeen) / 1000);
+        // Realistic travel threshold: speed (m/s) * dt * factor, or 800m absolute cap
+        const maxRealisticDist = Math.max(500, (Math.max(t.speed, existing.speed || 0, 80) / 3.6) * dtSec * 2.2);
+        const isDiscontinuous = (jumpDist > maxRealisticDist || jumpDist > 900);
+
+        if (isDiscontinuous) {
+          // Teleport / discontinuity detected: snap instantly and reset trail history
+          existing.displayed = { lat: targetPos.lat, lng: targetPos.lng };
+          existing.prev = { lat: targetPos.lat, lng: targetPos.lng };
+          existing.target = targetPos;
+          existing.snap = snap;
+          existing.blendStart = now;
+          existing.speed = t.speed;
+          existing.heading = t.heading;
+          existing.type = t.type;
+          existing.source = t.source;
+          existing.lastSeen = now;
+          existing.history = [[targetPos.lat, targetPos.lng]];
+          existing.marker.setLatLng([targetPos.lat, targetPos.lng]);
+          if (existing.polyline) {
+            existing.polyline.setLatLngs(existing.history);
+            existing.polyline.setStyle({ color: color });
+          }
+        } else if (isNewServerFix) {
           existing.prev = { lat: existing.displayed.lat, lng: existing.displayed.lng };
           existing.target = targetPos;
           existing.snap = snap;
@@ -1987,11 +2012,24 @@
           existing.source = t.source;
           existing.lastSeen = now;
 
-          // Push to motion trail history
-          existing.history.push([targetPos.lat, targetPos.lng]);
-          if (existing.history.length > MAX_TRAIL_POINTS) existing.history.shift();
+          // Push to motion trail history only when actively in motion
+          if (t.speed >= 2.0) {
+            const lastPt = existing.history[existing.history.length - 1];
+            const distFromLast = lastPt ? distanceMeters(lastPt[0], lastPt[1], targetPos.lat, targetPos.lng) : 999;
+            if (distFromLast >= 15 && distFromLast <= 500) {
+              existing.history.push([targetPos.lat, targetPos.lng]);
+              if (existing.history.length > MAX_TRAIL_POINTS) existing.history.shift();
+            }
+          } else {
+            // Gradually fade out old trail while dwelling so stationary trains stay neat
+            if (existing.history.length > 1) {
+              existing.history.shift();
+            }
+          }
+
           if (existing.polyline) {
             existing.polyline.setLatLngs(existing.history);
+            existing.polyline.setStyle({ color: color });
             if (showTrails && visibleTypes[cat] && !map.hasLayer(existing.polyline)) {
               existing.polyline.addTo(map);
             }
@@ -2008,9 +2046,15 @@
         });
         const marker = L.marker([targetPos.lat, targetPos.lng], { icon, zIndexOffset: 20 });
 
-        // Motion trail polyline with 2-point initial wake so it renders immediately
-        const initialTail = extrapolate(targetPos.lat, targetPos.lng, Math.max(t.speed, 25), (t.heading + 180) % 360, 0.4);
-        const history = [[initialTail.lat, initialTail.lng], [targetPos.lat, targetPos.lng]];
+        // Motion trail polyline: only spawn wake if train is actively running
+        let history = [];
+        if (t.speed >= 10) {
+          const initialTail = extrapolate(targetPos.lat, targetPos.lng, t.speed, (t.heading + 180) % 360, 0.4);
+          history = [[initialTail.lat, initialTail.lng], [targetPos.lat, targetPos.lng]];
+        } else {
+          history = [[targetPos.lat, targetPos.lng]];
+        }
+
         const polyline = L.polyline(history, {
           color: color,
           weight: 2.5,
@@ -2149,8 +2193,17 @@
 
       // Keep motion trail synced with head
       if (showTrails && m.polyline && m.history.length > 0) {
-        const trailWithHead = [...m.history, [lat, lng]];
-        m.polyline.setLatLngs(trailWithHead);
+        const lastHist = m.history[m.history.length - 1];
+        const distToHead = distanceMeters(lastHist[0], lastHist[1], lat, lng);
+        if (distToHead > 600) {
+          // Break history if head jumped too far to avoid smeared chord line across map
+          m.history = [[lat, lng]];
+        }
+        if (m.speed >= 1.5) {
+          m.polyline.setLatLngs([...m.history, [lat, lng]]);
+        } else {
+          m.polyline.setLatLngs(m.history);
+        }
       }
 
       // Smooth in-place telemetry update without tearing down the popup DOM
