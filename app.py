@@ -378,7 +378,7 @@ def _point_to_segment_dist_and_t(plat: float, plon: float, s1lat: float, s1lon: 
     return _haversine_km(plat, plon, proj_lat, proj_lon), t
 
 
-def _resolve_journey_station_progress(parsed_stops: list[dict], train_lat: float | None, train_lng: float | None) -> int:
+def _resolve_journey_station_progress(parsed_stops: list[dict], train_lat: float | None, train_lng: float | None, train_speed: float | None = None) -> int:
     N = len(parsed_stops)
     if N == 0:
         return 0
@@ -397,7 +397,7 @@ def _resolve_journey_station_progress(parsed_stops: list[dict], train_lat: float
         dest_lat, dest_lng = parsed_stops[-1].get("lat"), parsed_stops[-1].get("lng")
         if dest_lat is not None and dest_lng is not None:
             dist_to_dest = _haversine_km(train_lat, train_lng, dest_lat, dest_lng)
-            if dist_to_dest <= 0.65:
+            if dist_to_dest <= 0.65 and (train_speed is None or train_speed < 25.0):
                 for idx in range(N - 1):
                     parsed_stops[idx]["state"] = "passed"
                 parsed_stops[-1]["state"] = "next"
@@ -408,7 +408,7 @@ def _resolve_journey_station_progress(parsed_stops: list[dict], train_lat: float
         orig_lat, orig_lng = parsed_stops[0].get("lat"), parsed_stops[0].get("lng")
         if orig_lat is not None and orig_lng is not None:
             dist_to_orig = _haversine_km(train_lat, train_lng, orig_lat, orig_lng)
-            if dist_to_orig <= 0.65 and (dest_lat is None or _haversine_km(train_lat, train_lng, dest_lat, dest_lng) > 2.0):
+            if dist_to_orig <= 0.65 and (train_speed is None or train_speed < 15.0) and (dest_lat is None or _haversine_km(train_lat, train_lng, dest_lat, dest_lng) > 2.0):
                 parsed_stops[0]["state"] = "next"
                 parsed_stops[0]["at_origin"] = True
                 for idx in range(1, N):
@@ -416,15 +416,19 @@ def _resolve_journey_station_progress(parsed_stops: list[dict], train_lat: float
                 return 0
 
         # C. Check if train is dwelling directly at any station (within 450m)
+        # Train must be stopped or crawling (< 15 km/h) to dwell; express flybys continue along track
         dwelling_idx = None
         min_dwelling_dist = float("inf")
-        for idx, st in enumerate(parsed_stops):
-            s_lat, s_lng = st.get("lat"), st.get("lng")
-            if s_lat is not None and s_lng is not None:
-                d = _haversine_km(train_lat, train_lng, s_lat, s_lng)
-                if d < 0.45 and d < min_dwelling_dist:
-                    min_dwelling_dist = d
-                    dwelling_idx = idx
+        if train_speed is None or train_speed < 15.0:
+            for idx, st in enumerate(parsed_stops):
+                if st.get("cancelled", False) or st.get("status") == "PASS":
+                    continue
+                s_lat, s_lng = st.get("lat"), st.get("lng")
+                if s_lat is not None and s_lng is not None:
+                    d = _haversine_km(train_lat, train_lng, s_lat, s_lng)
+                    if d < 0.45 and d < min_dwelling_dist:
+                        min_dwelling_dist = d
+                        dwelling_idx = idx
 
         if dwelling_idx is not None:
             for idx in range(N):
@@ -1144,9 +1148,9 @@ async def api_weather():
     return JSONResponse({"timestamp": now, "count": 0, "corridors": []})
 
 
-async def _fetch_and_cache_journey(client: httpx.AsyncClient, train_id: int, lat: float | None = None, lng: float | None = None) -> dict | None:
+async def _fetch_and_cache_journey(client: httpx.AsyncClient, train_id: int, lat: float | None = None, lng: float | None = None, speed: float | None = None) -> dict | None:
     now = time.time()
-    cache_key = f"{train_id}_{round(lat or 0, 3)}_{round(lng or 0, 3)}"
+    cache_key = f"{train_id}_{round(lat or 0, 3)}_{round(lng or 0, 3)}_{round(speed or 0, 1)}"
     if cache_key in journey_cache and (now - journey_cache[cache_key][0]) < 12:
         return journey_cache[cache_key][1]
 
@@ -1231,10 +1235,11 @@ async def _fetch_and_cache_journey(client: httpx.AsyncClient, train_id: int, lat
     origin = parsed_stops[0]["name"] if parsed_stops else ""
     destination = parsed_stops[-1]["name"] if parsed_stops else ""
 
-    # Robust spatial & timeline progress resolution
-    next_idx = _resolve_journey_station_progress(parsed_stops, lat, lng)
+    # Robust spatial & timeline progress resolution with express flyby filtering
+    next_idx = _resolve_journey_station_progress(parsed_stops, lat, lng, speed)
     next_stop = parsed_stops[next_idx] if next_idx is not None and next_idx < len(parsed_stops) else None
     current_delay = next_stop["delay_minutes"] if next_stop else 0
+    is_cancelled = bool(payload.get("cancelled", False) or (parsed_stops and all(st.get("cancelled", False) for st in parsed_stops)))
 
     stock_info = payload.get("actualStock") or payload.get("plannedStock") or {}
     train_parts = stock_info.get("trainParts", [])
@@ -1257,6 +1262,7 @@ async def _fetch_and_cache_journey(client: httpx.AsyncClient, train_id: int, lat
         "destination": destination,
         "next_stop": next_stop,
         "current_delay": current_delay,
+        "cancelled": is_cancelled,
         "operator": operator_name or "NS",
         "category_name": category_name,
         "train_type": stock_info.get("trainType", ""),
@@ -1280,15 +1286,18 @@ async def _fetch_and_cache_journey(client: httpx.AsyncClient, train_id: int, lat
 
 
 @app.get("/api/journey/{train_id}")
-async def api_journey(train_id: int, lat: float | None = None, lng: float | None = None):
-    # Lookup live GPS position from active registry if not provided in query
-    if (lat is None or lng is None) and train_id in trains_registry:
+async def api_journey(train_id: int, lat: float | None = None, lng: float | None = None, speed: float | None = None):
+    # Lookup live GPS position and speed from active registry if not provided in query
+    if train_id in trains_registry:
         live_t = trains_registry[train_id]
-        lat = live_t.get("lat")
-        lng = live_t.get("lng")
+        if lat is None or lng is None:
+            lat = live_t.get("lat")
+            lng = live_t.get("lng")
+        if speed is None:
+            speed = live_t.get("speed")
 
     async with httpx.AsyncClient(http2=False) as client:
-        result = await _fetch_and_cache_journey(client, train_id, lat, lng)
+        result = await _fetch_and_cache_journey(client, train_id, lat, lng, speed)
         if not result:
             return JSONResponse({"error": f"Journey data not found for train {train_id}"}, status_code=404)
         return JSONResponse(result)

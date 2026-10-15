@@ -218,3 +218,71 @@ def test_parse_train_invalid_coordinates_and_types():
     assert app._parse_train({"lat": 52.0, "lng": 5.0}) is None
     # None inputs
     assert app._parse_train({}) is None
+
+
+# ── Tests for Express Flyby Filtering & Station Dwelling ─────────────
+
+def test_resolve_progress_express_flyby_filtering():
+    """High-speed express trains (>15 km/h) flying through an intermediate station must NOT be marked dwelling."""
+    # Train is 150 meters from Maarssen station coordinates (52.1386, 5.0392)
+    lat_near_maarssen = 52.1386 + 0.001
+    lng_near_maarssen = 5.0392 + 0.001
+
+    stops_fast = [
+        {"name": "Utrecht Centraal", "lat": 52.0894, "lng": 5.1100},
+        {"name": "Maarssen", "lat": 52.1386, "lng": 5.0392},
+        {"name": "Amsterdam Centraal", "lat": 52.3791, "lng": 4.9003},
+    ]
+
+    # 1. Express train flying by at 130 km/h
+    idx = app._resolve_journey_station_progress(stops_fast, lat_near_maarssen, lng_near_maarssen, train_speed=130.0)
+    assert not stops_fast[1].get("at_station", False), "130 km/h express train must not be marked as dwelling at station"
+
+    stops_slow = [
+        {"name": "Utrecht Centraal", "lat": 52.0894, "lng": 5.1100},
+        {"name": "Maarssen", "lat": 52.1386, "lng": 5.0392},
+        {"name": "Amsterdam Centraal", "lat": 52.3791, "lng": 4.9003},
+    ]
+
+    # 2. Train stopping / dwelling at Maarssen at 2.5 km/h
+    idx_dwelling = app._resolve_journey_station_progress(stops_slow, lat_near_maarssen, lng_near_maarssen, train_speed=2.5)
+    assert idx_dwelling == 1
+    assert stops_slow[1].get("at_station") is True, "Slow/stopped train (<15 km/h) within 450m must be marked as dwelling"
+
+
+def test_resolve_progress_cancelled_stop_cannot_dwell():
+    """A cancelled stop must never be marked dwelling even if the train is stationary next to it."""
+    stops = [
+        {"name": "Utrecht Centraal", "lat": 52.0894, "lng": 5.1100},
+        {"name": "Maarssen", "lat": 52.1386, "lng": 5.0392, "cancelled": True},
+        {"name": "Amsterdam Centraal", "lat": 52.3791, "lng": 4.9003},
+    ]
+    lat_near_maarssen = 52.1386
+    lng_near_maarssen = 5.0392
+
+    app._resolve_journey_station_progress(stops, lat_near_maarssen, lng_near_maarssen, train_speed=0.0)
+    assert not stops[1].get("at_station", False), "Cancelled stop must never be marked as dwelling"
+
+
+def test_resolve_progress_high_speed_origin_departure():
+    """Train departing origin at high speed must not be marked as at_origin."""
+    # Within 250m of Utrecht Centraal (52.0894, 5.1100)
+    lat_near_origin = 52.0894 + 0.0015
+    lng_near_origin = 5.1100 + 0.0015
+
+    stops_fast = [
+        {"name": "Utrecht Centraal", "lat": 52.0894, "lng": 5.1100},
+        {"name": "Amsterdam Centraal", "lat": 52.3791, "lng": 4.9003},
+    ]
+    # High speed departure (70 km/h)
+    app._resolve_journey_station_progress(stops_fast, lat_near_origin, lng_near_origin, train_speed=70.0)
+    assert not stops_fast[0].get("at_origin", False), "Train running at 70 km/h departing origin must not be marked at_origin"
+
+    stops_stopped = [
+        {"name": "Utrecht Centraal", "lat": 52.0894, "lng": 5.1100},
+        {"name": "Amsterdam Centraal", "lat": 52.3791, "lng": 4.9003},
+    ]
+    # Stationary at platform (0 km/h)
+    app._resolve_journey_station_progress(stops_stopped, lat_near_origin, lng_near_origin, train_speed=0.0)
+    assert stops_stopped[0].get("at_origin") is True, "Stationary train at origin platform must be marked at_origin"
+
