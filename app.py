@@ -827,6 +827,13 @@ async def lifespan(app: FastAPI):
     _poll_task = asyncio.create_task(_background_poller())
     _zmq_task = asyncio.create_task(_ndov_zeromq_consumer())
     yield
+    # Send sentinel to active SSE streams so they terminate immediately
+    for q in list(_listeners):
+        try:
+            q.put_nowait(None)
+        except Exception:
+            pass
+    _listeners.clear()
     _poll_task.cancel()
     _zmq_task.cancel()
     try:
@@ -853,6 +860,8 @@ async def api_stream(request: Request):
                     break
                 try:
                     data = await asyncio.wait_for(q.get(), timeout=15.0)
+                    if data is None:
+                        break
                     yield f"data: {json.dumps(data)}\n\n"
                 except asyncio.TimeoutError:
                     yield ": ping\n\n"
