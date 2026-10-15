@@ -34,6 +34,7 @@ TRACKS_FILE = DATA_DIR / "tracks.geojson"
 STATIONS_FILE = DATA_DIR / "stations.json"
 BORDER_FILE = DATA_DIR / "netherlands_border.geojson"
 PROVINCES_FILE = DATA_DIR / "provinces.geojson"
+DELAYS_FILE = DATA_DIR / "delays.json"
 POLL_INTERVAL = 5  # seconds (safe 12 req/min, well under 60 req/min limit)
 
 # ── Shared state ─────────────────────────────────────────────────
@@ -41,6 +42,26 @@ tracks_cache: dict | None = None
 stations_cache: list | None = None
 border_cache: dict | None = None
 provinces_cache: dict | None = None
+train_delays: dict[int, dict] = {}  # train_id -> {"delay": int, "delay_seconds": int, "updated_at": float}
+
+def _load_delays():
+    global train_delays
+    if DELAYS_FILE.exists():
+        try:
+            raw_del = json.loads(DELAYS_FILE.read_text(encoding="utf-8"))
+            now_t = time.time()
+            cutoff_t = now_t - 7200  # 2 hours
+            for k, v in raw_del.items():
+                if isinstance(v, dict) and v.get("updated_at", 0) > cutoff_t:
+                    train_delays[int(k)] = v
+        except Exception:
+            pass
+
+def _save_delays():
+    try:
+        DELAYS_FILE.write_text(json.dumps(train_delays), encoding="utf-8")
+    except Exception:
+        pass
 
 # Preload disk caches immediately so API endpoints never return 503 on first load
 try:
@@ -52,8 +73,10 @@ try:
         border_cache = json.loads(BORDER_FILE.read_text(encoding="utf-8"))
     if PROVINCES_FILE.exists():
         provinces_cache = json.loads(PROVINCES_FILE.read_text(encoding="utf-8"))
+    _load_delays()
 except Exception:
     pass
+
 trains_state: dict = {
     "timestamp": 0,
     "next_update_at": 0,
@@ -64,7 +87,6 @@ trains_state: dict = {
     "status": "starting",
     "trains": [],
 }
-train_delays: dict[int, dict] = {}  # train_id -> {"delay": int, "delay_seconds": int, "updated_at": float}
 disruptions_state: dict = {
     "timestamp": 0,
     "count": 0,
@@ -120,6 +142,38 @@ def _parse_dvs_xml(xml_str: str, now: float) -> bool:
                 t_num_el = dvs.find(".//{*}TreinNummer")
                 delay_el = dvs.find(".//{*}ExacteVertrekVertraging")
                 gedempte_el = dvs.find(".//{*}GedempteVertrekVertraging")
+                if t_num_el is not None and t_num_el.text and t_num_el.text.isdigit():
+                    tid = int(t_num_el.text)
+                    dur_text = delay_el.text if delay_el is not None and delay_el.text else (
+                        gedempte_el.text if gedempte_el is not None and gedempte_el.text else "PT0S"
+                    )
+                    sec = _parse_iso_duration_seconds(dur_text)
+                    delay_min = max(0, int((sec + 30) // 60))
+                    train_delays[tid] = {
+                        "delay": delay_min,
+                        "delay_seconds": sec,
+                        "updated_at": now
+                    }
+                    if tid in trains_registry:
+                        old_del = trains_registry[tid].get("delay", 0)
+                        if old_del != delay_min:
+                            trains_registry[tid]["delay"] = delay_min
+                            changed = True
+        return changed
+    except Exception:
+        return False
+
+
+def _parse_das_xml(xml_str: str, now: float) -> bool:
+    """Parse real-time arrival delays from NDOV InfoPlus DAS feed."""
+    try:
+        root = ET.fromstring(xml_str)
+        changed = False
+        for das in root.iter():
+            if das.tag.endswith("DynamischeAankomstStaat"):
+                t_num_el = das.find(".//{*}TreinNummer")
+                delay_el = das.find(".//{*}ExacteAankomstVertraging")
+                gedempte_el = das.find(".//{*}GedempteAankomstVertraging")
                 if t_num_el is not None and t_num_el.text and t_num_el.text.isdigit():
                     tid = int(t_num_el.text)
                     dur_text = delay_el.text if delay_el is not None and delay_el.text else (
@@ -641,6 +695,7 @@ async def _ndov_zeromq_consumer():
             sock.connect("tcp://pubsub.besteffort.ndovloket.nl:7664")
             sock.setsockopt_string(zmq.SUBSCRIBE, "/RIG/NStreinpositiesInterface5")
             sock.setsockopt_string(zmq.SUBSCRIBE, "/RIG/InfoPlusDVSInterface4")
+            sock.setsockopt_string(zmq.SUBSCRIBE, "/RIG/InfoPlusDASInterface4")
             while True:
                 try:
                     msg = await asyncio.wait_for(sock.recv_multipart(), timeout=15.0)
@@ -660,9 +715,14 @@ async def _ndov_zeromq_consumer():
                             pct = round(((len(t_list) - delayed_c) / len(t_list)) * 100) if t_list else 100
                             trains_state["delayed_count"] = delayed_c
                             trains_state["punctuality_pct"] = pct
-                            trains_state["timestamp"] = now
-                            trains_state["trains"] = t_list
-                            await _broadcast_trains(trains_state)
+                    elif "/RIG/InfoPlusDASInterface4" in topic:
+                        changed = _parse_das_xml(raw_xml, now)
+                        if changed and trains_registry:
+                            t_list = list(trains_registry.values())
+                            delayed_c = sum(1 for t in t_list if t.get("delay", 0) > 0)
+                            pct = round(((len(t_list) - delayed_c) / len(t_list)) * 100) if t_list else 100
+                            trains_state["delayed_count"] = delayed_c
+                            trains_state["punctuality_pct"] = pct
                     elif "/RIG/NStreinpositiesInterface5" in topic:
                         last_zmq_msg_time = now
                         changed = _parse_ndov_xml(raw_xml, now)
@@ -733,7 +793,10 @@ async def _poll_disruptions(client: httpx.AsyncClient):
         }
 
 
-HUB_STATIONS = ["UT", "ASD", "RTD", "GVC", "SHL", "ZL", "EHV", "AMF", "AH", "HT"]
+HUB_STATIONS = [
+    "UT", "ASD", "RTD", "GVC", "SHL", "ZL", "EHV", "AMF", "AH", "HT",
+    "GN", "LEDN", "BD", "DDR", "BGN", "MT", "ALM", "DV", "HGL", "DT"
+]
 
 
 async def _fetch_hub_departures(client: httpx.AsyncClient, st: str) -> list[dict]:
@@ -750,9 +813,9 @@ async def _poll_hub_departures(client: httpx.AsyncClient):
     global trains_state
     now = time.time()
     changed = False
-    # Concurrently query major railway hubs in parallel in one quick shot
+    # Concurrently query major railway hubs across all provinces in parallel
     results = await asyncio.gather(
-        *[_fetch_hub_departures(client, st) for st in HUB_STATIONS[:8]],
+        *[_fetch_hub_departures(client, st) for st in HUB_STATIONS],
         return_exceptions=True
     )
     for deps in results:
@@ -784,13 +847,16 @@ async def _poll_hub_departures(client: httpx.AsyncClient):
                 except Exception:
                     continue
 
-    if changed and trains_registry:
+    _save_delays()
+
+    if trains_registry:
         t_list = list(trains_registry.values())
         delayed_c = sum(1 for t in t_list if t.get("delay", 0) > 0)
         pct = round(((len(t_list) - delayed_c) / len(t_list)) * 100) if t_list else 100
         trains_state["delayed_count"] = delayed_c
         trains_state["punctuality_pct"] = pct
-        await _broadcast_trains(trains_state)
+        if changed:
+            await _broadcast_trains(trains_state)
 
 
 async def _background_poller():
@@ -801,7 +867,6 @@ async def _background_poller():
         await _ensure_tracks(client)
         await _ensure_stations(client)
         await _poll_disruptions(client)
-        await _poll_hub_departures(client)  # Quick concurrent seed of fleet delays across hubs
         while True:
             # Fall back to REST vehicle endpoint only when ZeroMQ has been quiet for > 15s
             if (time.time() - last_zmq_msg_time) >= 15.0:
@@ -824,6 +889,12 @@ async def _background_poller():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _poll_task, _zmq_task
+    _load_delays()
+    # Pre-seed network delay state across all provinces BEFORE serving traffic
+    async with httpx.AsyncClient(http2=False) as client:
+        await _ensure_tracks(client)
+        await _ensure_stations(client)
+        await _poll_hub_departures(client)
     _poll_task = asyncio.create_task(_background_poller())
     _zmq_task = asyncio.create_task(_ndov_zeromq_consumer())
     yield

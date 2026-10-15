@@ -345,6 +345,40 @@ def test_parse_dvs_xml_populates_delays_and_updates_registry():
     assert app.trains_registry[6089]["delay"] == 5
 
 
+def test_parse_das_xml_populates_delays_and_updates_registry():
+    """Verify DAS arrival XML message updates train_delays and trains_registry."""
+    now = 1700000000.0
+    now_iso = datetime.fromtimestamp(now, tz=timezone.utc).isoformat()
+
+    # Pre-register train 302985 on radar
+    gps_xml = _build_trein_xml([
+        {"trein_nummer": "302985", "cabs": [{"lat": "51.0", "lng": "5.8", "gps_time": now_iso}]}
+    ])
+    app._parse_ndov_xml(gps_xml, now)
+    assert 302985 in app.trains_registry
+    assert app.trains_registry[302985]["delay"] == 0
+
+    # Ingest DAS update: 302985 is delayed on arrival by PT1M12S (72s -> 1 min)
+    das_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<PutReisInformatieBoodschapIn xmlns="urn:ndov:cdm:trein:reisinformatie:messages:dynamischeaankomststaat:1">
+  <ReisInformatieProductDAS xmlns="urn:ndov:cdm:trein:reisinformatie:data:4">
+    <DynamischeAankomstStaat>
+      <TreinAankomst>
+        <TreinNummer>302985</TreinNummer>
+      </TreinAankomst>
+      <ExacteAankomstVertraging>PT1M12S</ExacteAankomstVertraging>
+    </DynamischeAankomstStaat>
+  </ReisInformatieProductDAS>
+</PutReisInformatieBoodschapIn>"""
+
+    changed = app._parse_das_xml(das_xml, now)
+    assert changed is True
+    assert 302985 in app.train_delays
+    assert app.train_delays[302985]["delay"] == 1
+    assert app.train_delays[302985]["delay_seconds"] == 72
+    assert app.trains_registry[302985]["delay"] == 1
+
+
 def test_fleet_punctuality_calculation_with_mixed_delays():
     """Verify delayed_count and punctuality_pct calculation across fleet."""
     now = 1700000000.0

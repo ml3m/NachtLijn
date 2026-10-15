@@ -2275,17 +2275,6 @@
         if (m.polyline && map.hasLayer(m.polyline)) map.removeLayer(m.polyline);
       }
     }
-
-    if ($countDelayedTrains) {
-      $countDelayedTrains.textContent = String(delayedCount);
-    }
-    if ($punctualityText && totalCount > 0) {
-      const punctualityPct = Math.max(0, Math.min(100, Math.round(((totalCount - delayedCount) / totalCount) * 100)));
-      $punctualityText.textContent = `${punctualityPct}% Op tijd`;
-      if ($punctualityDot) {
-        $punctualityDot.className = punctualityPct < 90 ? "punctuality-dot warn" : "punctuality-dot";
-      }
-    }
   }
 
   if ($filterDelayedBtn) {
@@ -3057,6 +3046,7 @@
   checkUrlParams();
   window.addEventListener("popstate", checkUrlParams);
   if (typeof window !== "undefined" && !window.__TEST_ENV__) {
+    fetchTrains();
     connectSSE();
     requestAnimationFrame(animate);
     requestAnimationFrame(updateCountdown);
