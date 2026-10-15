@@ -989,52 +989,6 @@
     }
   }
 
-  // ── Background Fleet Journey & Delay Prefetcher ─────────────────
-  const journeyPrefetchQueue = [];
-  const queuedTrainSet = new Set();
-  let isPrefetchingJourneys = false;
-
-  function queueJourneyPrefetches(trainIds) {
-    if (!trainIds || !Array.isArray(trainIds)) return;
-    for (const tid of trainIds) {
-      if (!journeyCache[tid] && !queuedTrainSet.has(tid)) {
-        queuedTrainSet.add(tid);
-        journeyPrefetchQueue.push(tid);
-      }
-    }
-    pumpJourneyPrefetchQueue();
-  }
-
-  async function pumpJourneyPrefetchQueue() {
-    if (isPrefetchingJourneys || journeyPrefetchQueue.length === 0) return;
-    isPrefetchingJourneys = true;
-
-    while (journeyPrefetchQueue.length > 0) {
-      const tid = journeyPrefetchQueue.shift();
-      queuedTrainSet.delete(tid);
-      if (journeyCache[tid]) continue;
-
-      const m = markers[tid];
-      const pos = m ? (m.displayed || m.target) : null;
-      try {
-        let url = `/api/journey/${tid}`;
-        if (pos && pos.lat) url += `?lat=${pos.lat.toFixed(5)}&lng=${pos.lng.toFixed(5)}`;
-        const r = await fetch(url);
-        if (r.ok) {
-          const j = await r.json();
-          journeyCache[tid] = j;
-          if (m && j.current_delay !== undefined) {
-            m.delay = j.current_delay;
-          }
-          updateMarkerVisibility();
-        }
-      } catch (_) {}
-      // Pacing interval between background requests
-      await new Promise(resolve => setTimeout(resolve, 200));
-    }
-    isPrefetchingJourneys = false;
-  }
-
   async function fetchJourneyForCache(trainId, pos) {
     try {
       let url = `/api/journey/${trainId}`;
@@ -1043,12 +997,19 @@
       if (r.ok) {
         const j = await r.json();
         journeyCache[trainId] = j;
-        if (markers[trainId] && j.current_delay !== undefined) {
-          markers[trainId].delay = j.current_delay;
+        const m = markers[trainId];
+        if (m && j.current_delay !== undefined) {
+          m.delay = j.current_delay;
+        }
+        if (followedTrainId === trainId && m) {
+          updateCockpitHUD(m);
         }
         updateMarkerVisibility();
       }
     } catch (_) {}
+    if (markers[trainId]) {
+      markers[trainId]._fetchingJourney = false;
+    }
   }
 
   if ($cockpitStopBtn) {
@@ -2620,10 +2581,6 @@
       window.openJourney(tid);
     }
 
-    if (data.trains && data.trains.length > 0) {
-      queueJourneyPrefetches(data.trains.map(t => t.id));
-    }
-
     updateSpeedLeaderboard();
     updateMarkerVisibility();
   }
@@ -3139,7 +3096,7 @@
       PROVINCE_COLORS,
       getProvinceColor,
       journeyCache,
-      queueJourneyPrefetches,
+      fetchJourneyForCache,
     };
   }
 

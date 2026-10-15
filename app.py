@@ -636,6 +636,7 @@ async def _ndov_zeromq_consumer():
     while True:
         ctx = zmq.asyncio.Context()
         sock = ctx.socket(zmq.SUB)
+        sock.setsockopt(zmq.LINGER, 0)
         try:
             sock.connect("tcp://pubsub.besteffort.ndovloket.nl:7664")
             sock.setsockopt_string(zmq.SUBSCRIBE, "/RIG/NStreinpositiesInterface5")
@@ -669,11 +670,19 @@ async def _ndov_zeromq_consumer():
                             await _broadcast_trains(trains_state)
                 except Exception:
                     pass
+        except asyncio.CancelledError:
+            break
         except Exception:
             await asyncio.sleep(4)
         finally:
-            sock.close()
-            ctx.term()
+            try:
+                sock.close(linger=0)
+            except Exception:
+                pass
+            try:
+                ctx.destroy(linger=0)
+            except Exception:
+                pass
 
 
 async def _poll_disruptions(client: httpx.AsyncClient):
@@ -727,43 +736,53 @@ async def _poll_disruptions(client: httpx.AsyncClient):
 HUB_STATIONS = ["UT", "ASD", "RTD", "GVC", "SHL", "ZL", "EHV", "AMF", "AH", "HT"]
 
 
+async def _fetch_hub_departures(client: httpx.AsyncClient, st: str) -> list[dict]:
+    try:
+        data = await _fetch_json(client, "/reisinformatie-api/api/v2/departures", params={"station": st, "maxJourneys": 40})
+        if data and "payload" in data:
+            return data["payload"].get("departures", [])
+    except Exception:
+        pass
+    return []
+
+
 async def _poll_hub_departures(client: httpx.AsyncClient):
     global trains_state
     now = time.time()
     changed = False
-    for st in HUB_STATIONS[:6]:
-        try:
-            data = await _fetch_json(client, "/reisinformatie-api/api/v2/departures", params={"station": st, "maxJourneys": 40})
-            if not data or "payload" not in data:
+    # Concurrently query major railway hubs in parallel in one quick shot
+    results = await asyncio.gather(
+        *[_fetch_hub_departures(client, st) for st in HUB_STATIONS[:8]],
+        return_exceptions=True
+    )
+    for deps in results:
+        if isinstance(deps, Exception) or not isinstance(deps, list):
+            continue
+        for d in deps:
+            prod = d.get("product") or {}
+            t_num_str = prod.get("number")
+            if not (t_num_str and t_num_str.isdigit()):
                 continue
-            deps = data["payload"].get("departures", [])
-            for d in deps:
-                prod = d.get("product") or {}
-                t_num_str = prod.get("number")
-                if not (t_num_str and t_num_str.isdigit()):
+            tid = int(t_num_str)
+            planned_dt = d.get("plannedDateTime")
+            actual_dt = d.get("actualDateTime")
+            if planned_dt and actual_dt:
+                try:
+                    p_dt = datetime.fromisoformat(planned_dt)
+                    a_dt = datetime.fromisoformat(actual_dt)
+                    sec = int((a_dt - p_dt).total_seconds())
+                    delay_min = max(0, int((sec + 30) // 60))
+                    train_delays[tid] = {
+                        "delay": delay_min,
+                        "delay_seconds": sec,
+                        "updated_at": now
+                    }
+                    if tid in trains_registry:
+                        if trains_registry[tid].get("delay") != delay_min:
+                            trains_registry[tid]["delay"] = delay_min
+                            changed = True
+                except Exception:
                     continue
-                tid = int(t_num_str)
-                planned_dt = d.get("plannedDateTime")
-                actual_dt = d.get("actualDateTime")
-                if planned_dt and actual_dt:
-                    try:
-                        p_dt = datetime.fromisoformat(planned_dt)
-                        a_dt = datetime.fromisoformat(actual_dt)
-                        sec = int((a_dt - p_dt).total_seconds())
-                        delay_min = max(0, int((sec + 30) // 60))
-                        train_delays[tid] = {
-                            "delay": delay_min,
-                            "delay_seconds": sec,
-                            "updated_at": now
-                        }
-                        if tid in trains_registry:
-                            if trains_registry[tid].get("delay") != delay_min:
-                                trains_registry[tid]["delay"] = delay_min
-                                changed = True
-                    except Exception:
-                        continue
-        except Exception:
-            pass
 
     if changed and trains_registry:
         t_list = list(trains_registry.values())
@@ -774,21 +793,6 @@ async def _poll_hub_departures(client: httpx.AsyncClient):
         await _broadcast_trains(trains_state)
 
 
-async def _prefetch_active_journeys(client: httpx.AsyncClient, max_batch: int = 3):
-    now = time.time()
-    t_keys = list(trains_registry.keys())
-    candidates = [
-        tid for tid in t_keys
-        if tid not in train_delays or (now - train_delays[tid].get("updated_at", 0)) > 120
-    ]
-    if not candidates:
-        return
-    for tid in candidates[:max_batch]:
-        t_item = trains_registry.get(tid, {})
-        await _fetch_and_cache_journey(client, tid, t_item.get("lat"), t_item.get("lng"))
-        await asyncio.sleep(0.15)
-
-
 async def _background_poller():
     global _backoff
     disr_ticks = 0
@@ -797,17 +801,14 @@ async def _background_poller():
         await _ensure_tracks(client)
         await _ensure_stations(client)
         await _poll_disruptions(client)
-        await _poll_hub_departures(client)  # Initial quick seed of fleet delays
+        await _poll_hub_departures(client)  # Quick concurrent seed of fleet delays across hubs
         while True:
             # Fall back to REST vehicle endpoint only when ZeroMQ has been quiet for > 15s
             if (time.time() - last_zmq_msg_time) >= 15.0:
                 await _poll_trains(client)
 
-            # Continuous background prefetch for active trains so journeys and delays are instantly ready
-            await _prefetch_active_journeys(client, max_batch=3)
-
             hub_ticks += 1
-            if hub_ticks >= 6:  # poll hub departures every ~30s (6 * 5s)
+            if hub_ticks >= 6:  # refresh hub departures every ~30s (6 * 5s)
                 await _poll_hub_departures(client)
                 hub_ticks = 0
 
@@ -887,6 +888,24 @@ async def api_tracks():
 @app.get("/api/trains")
 async def api_trains():
     return JSONResponse(trains_state)
+
+
+@app.get("/api/delays")
+async def api_delays():
+    """Return real-time delays across the entire active fleet in one go."""
+    now = time.time()
+    t_list = list(trains_registry.values())
+    delays_map = {str(t["id"]): t.get("delay", 0) for t in t_list}
+    delayed_c = sum(1 for d in delays_map.values() if d > 0)
+    total_c = len(delays_map)
+    pct = round(((total_c - delayed_c) / total_c) * 100) if total_c else 100
+    return JSONResponse({
+        "timestamp": now,
+        "total_trains": total_c,
+        "delayed_count": delayed_c,
+        "punctuality_pct": pct,
+        "delays": delays_map
+    })
 
 
 @app.get("/api/stations")

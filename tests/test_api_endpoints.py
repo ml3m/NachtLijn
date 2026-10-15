@@ -482,3 +482,26 @@ async def test_api_provinces_corrupted_file_handles_gracefully(monkeypatch, tmp_
     data = json.loads(response.body.decode("utf-8"))
     assert "error" in data
 
+
+@pytest.mark.asyncio
+async def test_api_delays_bulk_fleet_payload():
+    """Verify /api/delays returns delays for all active trains in one single bulk payload."""
+    app.trains_registry.clear()
+    app.train_delays.clear()
+
+    # Register trains: 200 (on time), 201 (+4 min), 202 (+7 min)
+    app.trains_registry[200] = {"id": 200, "lat": 52.0, "lng": 5.0, "type": "IC", "delay": 0}
+    app.trains_registry[201] = {"id": 201, "lat": 52.1, "lng": 5.1, "type": "SPR", "delay": 4}
+    app.trains_registry[202] = {"id": 202, "lat": 52.2, "lng": 5.2, "type": "IC", "delay": 7}
+
+    response = await app.api_delays()
+    assert response.status_code == 200
+    data = json.loads(response.body.decode("utf-8"))
+
+    assert data["total_trains"] == 3
+    assert data["delayed_count"] == 2
+    assert data["punctuality_pct"] == 33  # (1 / 3) * 100 = 33%
+    assert data["delays"]["200"] == 0
+    assert data["delays"]["201"] == 4
+    assert data["delays"]["202"] == 7
+

@@ -288,9 +288,9 @@ test("getProvinceColor gracefully handles edge cases and unknown provinces", () 
   assert.equal(core.getProvinceColor("  Utrecht  "), "#f7bc17");
 });
 
-// ── Tests for Journey Prefetching ───────────────────────────────────
+// ── Tests for On-Demand Journey Fetching ────────────────────────────
 
-test("queueJourneyPrefetches fetches and caches train journeys without duplication", async () => {
+test("fetchJourneyForCache fetches and caches train journey on demand", async () => {
   const originalFetch = globalThis.fetch;
   const fetchedUrls = [];
   globalThis.fetch = async (url) => {
@@ -301,6 +301,8 @@ test("queueJourneyPrefetches fetches and caches train journeys without duplicati
       ok: true,
       json: async () => ({
         train_number: tid,
+        origin: "Utrecht Centraal",
+        destination: "Amsterdam Centraal",
         current_delay: 3,
         stops: []
       })
@@ -308,18 +310,11 @@ test("queueJourneyPrefetches fetches and caches train journeys without duplicati
   };
 
   try {
-    core.queueJourneyPrefetches([88881, 88881, 88882]);
-    // Allow queue pump to process (200ms per item)
-    await new Promise(r => setTimeout(r, 500));
+    await core.fetchJourneyForCache(88881, { lat: 52.0894, lng: 5.1098 });
     assert.ok(core.journeyCache[88881], "Journey cache must contain 88881");
+    assert.equal(core.journeyCache[88881].origin, "Utrecht Centraal");
     assert.equal(core.journeyCache[88881].current_delay, 3);
-    assert.ok(core.journeyCache[88882], "Journey cache must contain 88882");
-
-    // Re-queueing already cached train 88881 should not trigger another fetch
-    const fetchCount = fetchedUrls.length;
-    core.queueJourneyPrefetches([88881]);
-    await new Promise(r => setTimeout(r, 100));
-    assert.equal(fetchedUrls.length, fetchCount, "Must not refetch already cached train");
+    assert.ok(fetchedUrls.some(u => u.includes("88881")), "Must fetch train 88881");
   } finally {
     globalThis.fetch = originalFetch;
   }
