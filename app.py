@@ -372,64 +372,117 @@ async def _ndov_zeromq_consumer():
                     root = ET.fromstring(raw_xml)
                     now = time.time()
                     last_zmq_msg_time = now
+                    now_utc = datetime.now(timezone.utc)
                     changed = False
                     for loc in root.findall(".//{http://schemas.datacontract.org/2004/07/Cognos.Infrastructure.Models}TreinLocation"):
                         nr_el = loc.find("{http://schemas.datacontract.org/2004/07/Cognos.Infrastructure.Models}TreinNummer")
                         if nr_el is None or not nr_el.text:
                             continue
                         tid = int(nr_el.text)
+
+                        valid_parts = []
                         for part in loc.findall(".//{http://schemas.datacontract.org/2004/07/Cognos.Infrastructure.Models}TreinMaterieelDelen"):
                             lat_el = part.find("{http://schemas.datacontract.org/2004/07/Cognos.Infrastructure.Models}Latitude")
                             lng_el = part.find("{http://schemas.datacontract.org/2004/07/Cognos.Infrastructure.Models}Longitude")
                             spd_el = part.find("{http://schemas.datacontract.org/2004/07/Cognos.Infrastructure.Models}Snelheid")
                             hdg_el = part.find("{http://schemas.datacontract.org/2004/07/Cognos.Infrastructure.Models}Richting")
                             gps_el = part.find("{http://schemas.datacontract.org/2004/07/Cognos.Infrastructure.Models}GpsDatumTijd")
+                            volg_el = part.find("{http://schemas.datacontract.org/2004/07/Cognos.Infrastructure.Models}MaterieelDeelVolgorde")
+                            mat_el = part.find("{http://schemas.datacontract.org/2004/07/Cognos.Infrastructure.Models}MaterieelNummer")
+
                             if lat_el is not None and lng_el is not None and lat_el.text and lng_el.text:
                                 try:
-                                    lat = float(lat_el.text)
-                                    lng = float(lng_el.text)
-                                    speed = float(spd_el.text) if spd_el is not None and spd_el.text else 0.0
-                                    heading = float(hdg_el.text) if hdg_el is not None and hdg_el.text else 0.0
-                                    gps_str = gps_el.text.strip() if gps_el is not None and gps_el.text else ""
+                                    p_lat = float(lat_el.text)
+                                    p_lng = float(lng_el.text)
+                                    if not (50.5 <= p_lat <= 54.0 and 2.5 <= p_lng <= 7.5):
+                                        continue
+                                    p_spd = float(spd_el.text) if spd_el is not None and spd_el.text else 0.0
+                                    p_hdg = float(hdg_el.text) if hdg_el is not None and hdg_el.text else 0.0
+                                    p_gps_str = gps_el.text.strip() if gps_el is not None and gps_el.text else ""
 
-                                    # GPS timestamp age verification
-                                    gps_age = 0.0
-                                    if gps_str:
+                                    p_gps_age = 0.0
+                                    p_gps_epoch = 0.0
+                                    if p_gps_str:
                                         try:
-                                            gps_dt = datetime.fromisoformat(gps_str.replace("Z", "+00:00"))
-                                            gps_age = (datetime.now(timezone.utc) - gps_dt).total_seconds()
+                                            p_dt = datetime.fromisoformat(p_gps_str.replace("Z", "+00:00"))
+                                            p_gps_age = (now_utc - p_dt).total_seconds()
+                                            p_gps_epoch = p_dt.timestamp()
                                         except Exception:
-                                            pass
+                                            p_gps_age = 999.0
+                                    else:
+                                        p_gps_age = 999.0
 
-                                    # If fix is older than 50s, the train is no longer moving actively
-                                    if gps_age > 50.0:
-                                        speed = 0.0
+                                    # Reject fixes older than 75s or future clock-skew fixes > 15s
+                                    if p_gps_age > 75.0 or p_gps_age < -15.0:
+                                        continue
 
-                                    # Zero-movement detection: if coordinates haven't changed, train is stationary
-                                    prev = trains_registry.get(tid)
-                                    if prev:
-                                        dist_moved_m = _haversine_km(lat, lng, prev["lat"], prev["lng"]) * 1000.0
-                                        time_delta = now - prev.get("last_seen", now)
-                                        # If moved less than 5m and at least 6s elapsed, clamp speed to 0
-                                        if dist_moved_m < 5.0 and time_delta >= 6.0:
-                                            speed = 0.0
+                                    volg = int(volg_el.text) if volg_el is not None and volg_el.text and volg_el.text.isdigit() else 1
+                                    matnr = int(mat_el.text) if mat_el is not None and mat_el.text and mat_el.text.isdigit() else 0
 
-                                    t_type = "IC" if (tid < 4000 or (11000 <= tid < 14000)) else ("SPR" if (tid < 10000 or (20000 <= tid < 30000)) else "other")
-                                    trains_registry[tid] = {
-                                        "id": tid,
-                                        "lat": lat,
-                                        "lng": lng,
-                                        "speed": speed,
-                                        "heading": heading,
-                                        "type": t_type,
-                                        "source": "NDOV-ZMQ",
-                                        "gps_time": gps_str,
-                                        "last_seen": now
-                                    }
-                                    changed = True
+                                    valid_parts.append({
+                                        "lat": p_lat,
+                                        "lng": p_lng,
+                                        "speed": p_spd,
+                                        "heading": p_hdg,
+                                        "gps_str": p_gps_str,
+                                        "gps_age": p_gps_age,
+                                        "gps_epoch": p_gps_epoch,
+                                        "volgorde": volg,
+                                        "matnr": matnr,
+                                    })
                                 except ValueError:
-                                    pass
-                                break
+                                    continue
+
+                        if not valid_parts:
+                            continue
+
+                        # Deterministic cab unit selection: sort by volgorde and matnr
+                        # This permanently eliminates multi-unit front/rear cab bouncing
+                        valid_parts.sort(key=lambda p: (p["volgorde"], p["matnr"]))
+                        chosen = valid_parts[0]
+
+                        lat = chosen["lat"]
+                        lng = chosen["lng"]
+                        speed = chosen["speed"]
+                        heading = chosen["heading"]
+                        gps_str = chosen["gps_str"]
+                        gps_epoch = chosen["gps_epoch"]
+
+                        # Sanity checks against previous fix for this train
+                        prev = trains_registry.get(tid)
+                        if prev:
+                            # Drop out-of-order stale packets
+                            if gps_epoch > 0 and prev.get("gps_epoch", 0) > 0 and gps_epoch < prev["gps_epoch"]:
+                                continue
+
+                            dist_m = _haversine_km(lat, lng, prev["lat"], prev["lng"]) * 1000.0
+                            time_delta = now - prev.get("last_seen", now)
+
+                            # Supersonic teleport check: drop glitches (> 3.5km in < 30s implies > 420 km/h)
+                            if time_delta < 30.0 and dist_m > 3500.0:
+                                continue
+
+                            # Zero-movement detection: stationary train
+                            if dist_m < 5.0 and time_delta >= 5.0:
+                                speed = 0.0
+
+                        if speed < 1.5:
+                            speed = 0.0
+
+                        t_type = "IC" if (tid < 4000 or (11000 <= tid < 14000)) else ("SPR" if (tid < 10000 or (20000 <= tid < 30000)) else "other")
+                        trains_registry[tid] = {
+                            "id": tid,
+                            "lat": lat,
+                            "lng": lng,
+                            "speed": speed,
+                            "heading": heading,
+                            "type": t_type,
+                            "source": "NDOV-ZMQ",
+                            "gps_time": gps_str,
+                            "gps_epoch": gps_epoch,
+                            "last_seen": now
+                        }
+                        changed = True
 
                     # Prune trains not seen or with stale GPS > 80s
                     cutoff = now - 80
