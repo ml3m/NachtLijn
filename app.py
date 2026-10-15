@@ -5,6 +5,7 @@ import gzip
 import json
 import math
 import os
+import re
 import time
 import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager
@@ -58,9 +59,12 @@ trains_state: dict = {
     "next_update_at": 0,
     "count": 0,
     "counts": {"IC": 0, "SPR": 0, "other": 0},
+    "delayed_count": 0,
+    "punctuality_pct": 100,
     "status": "starting",
     "trains": [],
 }
+train_delays: dict[int, dict] = {}  # train_id -> {"delay": int, "delay_seconds": int, "updated_at": float}
 disruptions_state: dict = {
     "timestamp": 0,
     "count": 0,
@@ -91,20 +95,69 @@ async def _broadcast_trains(data: dict):
 
 
 # ── Helpers ──────────────────────────────────────────────────────
+def _parse_iso_duration_seconds(dur_str: str | None) -> int:
+    if not dur_str or dur_str == "None":
+        return 0
+    is_neg = dur_str.startswith("-")
+    clean = dur_str.lstrip("-").replace("PT", "")
+    m = re.match(r"^(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$", clean)
+    if not m:
+        return 0
+    hrs = int(m.group(1) or 0)
+    mins = int(m.group(2) or 0)
+    secs = int(m.group(3) or 0)
+    total = hrs * 3600 + mins * 60 + secs
+    return -total if is_neg else total
+
+
+def _parse_dvs_xml(xml_str: str, now: float) -> bool:
+    """Parse real-time departure delays from NDOV InfoPlus DVS feed."""
+    try:
+        root = ET.fromstring(xml_str)
+        changed = False
+        for dvs in root.iter():
+            if dvs.tag.endswith("DynamischeVertrekStaat"):
+                t_num_el = dvs.find(".//{*}TreinNummer")
+                delay_el = dvs.find(".//{*}ExacteVertrekVertraging")
+                gedempte_el = dvs.find(".//{*}GedempteVertrekVertraging")
+                if t_num_el is not None and t_num_el.text and t_num_el.text.isdigit():
+                    tid = int(t_num_el.text)
+                    dur_text = delay_el.text if delay_el is not None and delay_el.text else (
+                        gedempte_el.text if gedempte_el is not None and gedempte_el.text else "PT0S"
+                    )
+                    sec = _parse_iso_duration_seconds(dur_text)
+                    delay_min = max(0, int((sec + 30) // 60))
+                    train_delays[tid] = {
+                        "delay": delay_min,
+                        "delay_seconds": sec,
+                        "updated_at": now
+                    }
+                    if tid in trains_registry:
+                        old_del = trains_registry[tid].get("delay", 0)
+                        if old_del != delay_min:
+                            trains_registry[tid]["delay"] = delay_min
+                            changed = True
+        return changed
+    except Exception:
+        return False
+
+
 def _parse_train(t: dict) -> dict | None:
     try:
         lat = float(t["lat"])
         lng = float(t["lng"])
         if not (-90 <= lat <= 90 and -180 <= lng <= 180):
             return None
+        tid = int(t["treinNummer"])
         return {
-            "id": int(t["treinNummer"]),
+            "id": tid,
             "lat": lat,
             "lng": lng,
             "speed": float(t.get("snelheid", 0)),
             "heading": float(t.get("richting", 0)),
             "type": str(t.get("type", "?")),
             "source": str(t.get("bron", "")),
+            "delay": train_delays.get(tid, {}).get("delay", 0),
         }
     except (KeyError, ValueError, TypeError):
         return None
@@ -223,12 +276,16 @@ async def _poll_trains(client: httpx.AsyncClient):
         ic_count = sum(1 for t in parsed if t["type"] in ("IC", "ICE"))
         spr_count = sum(1 for t in parsed if t["type"] == "SPR")
         other_count = len(parsed) - ic_count - spr_count
+        delayed_count = sum(1 for t in parsed if t.get("delay", 0) > 0)
+        pct = round(((len(parsed) - delayed_count) / len(parsed)) * 100) if parsed else 100
 
         trains_state = {
             "timestamp": now,
             "next_update_at": now + POLL_INTERVAL,
             "count": len(parsed),
             "counts": {"IC": ic_count, "SPR": spr_count, "other": other_count},
+            "delayed_count": delayed_count,
+            "punctuality_pct": pct,
             "status": "live",
             "feed": "NS REST Gateway (Fallback)",
             "trains": parsed,
@@ -534,7 +591,8 @@ def _parse_ndov_xml(raw_xml: str, now: float | None = None) -> bool:
             "source": "NDOV-ZMQ",
             "gps_time": gps_str,
             "gps_epoch": gps_epoch,
-            "last_seen": now
+            "last_seen": now,
+            "delay": train_delays.get(tid, {}).get("delay", 0),
         }
         changed = True
 
@@ -545,16 +603,26 @@ def _parse_ndov_xml(raw_xml: str, now: float | None = None) -> bool:
         if t_item["last_seen"] < cutoff:
             del trains_registry[tid]
 
+    # Prune stale delay records older than 2 hours
+    cutoff_delays = now - 7200
+    for tid in list(train_delays.keys()):
+        if train_delays[tid].get("updated_at", 0) < cutoff_delays:
+            del train_delays[tid]
+
     if changed and trains_registry:
         t_list = list(trains_registry.values())
         ic_c = sum(1 for t in t_list if t["type"] in ("IC", "ICE"))
         spr_c = sum(1 for t in t_list if t["type"] == "SPR")
         oth_c = len(t_list) - ic_c - spr_c
+        delayed_c = sum(1 for t in t_list if t.get("delay", 0) > 0)
+        pct = round(((len(t_list) - delayed_c) / len(t_list)) * 100) if t_list else 100
         trains_state = {
             "timestamp": now,
             "next_update_at": now + 4,
             "count": len(t_list),
             "counts": {"IC": ic_c, "SPR": spr_c, "other": oth_c},
+            "delayed_count": delayed_c,
+            "punctuality_pct": pct,
             "status": "live",
             "feed": "NDOV ZeroMQ Push",
             "trains": t_list,
@@ -564,13 +632,14 @@ def _parse_ndov_xml(raw_xml: str, now: float | None = None) -> bool:
 
 
 async def _ndov_zeromq_consumer():
-    global last_zmq_msg_time
+    global last_zmq_msg_time, trains_state
     while True:
         ctx = zmq.asyncio.Context()
         sock = ctx.socket(zmq.SUB)
         try:
             sock.connect("tcp://pubsub.besteffort.ndovloket.nl:7664")
             sock.setsockopt_string(zmq.SUBSCRIBE, "/RIG/NStreinpositiesInterface5")
+            sock.setsockopt_string(zmq.SUBSCRIBE, "/RIG/InfoPlusDVSInterface4")
             while True:
                 try:
                     msg = await asyncio.wait_for(sock.recv_multipart(), timeout=15.0)
@@ -579,11 +648,25 @@ async def _ndov_zeromq_consumer():
                 if len(msg) < 2:
                     continue
                 try:
+                    topic = msg[0].decode("utf-8", errors="ignore")
                     raw_xml = gzip.decompress(msg[1]).decode("utf-8", errors="replace")
                     now = time.time()
-                    changed = _parse_ndov_xml(raw_xml, now)
-                    if changed:
-                        await _broadcast_trains(trains_state)
+                    if "/RIG/InfoPlusDVSInterface4" in topic:
+                        changed = _parse_dvs_xml(raw_xml, now)
+                        if changed and trains_registry:
+                            t_list = list(trains_registry.values())
+                            delayed_c = sum(1 for t in t_list if t.get("delay", 0) > 0)
+                            pct = round(((len(t_list) - delayed_c) / len(t_list)) * 100) if t_list else 100
+                            trains_state["delayed_count"] = delayed_c
+                            trains_state["punctuality_pct"] = pct
+                            trains_state["timestamp"] = now
+                            trains_state["trains"] = t_list
+                            await _broadcast_trains(trains_state)
+                    elif "/RIG/NStreinpositiesInterface5" in topic:
+                        last_zmq_msg_time = now
+                        changed = _parse_ndov_xml(raw_xml, now)
+                        if changed:
+                            await _broadcast_trains(trains_state)
                 except Exception:
                     pass
         except Exception:
@@ -641,21 +724,98 @@ async def _poll_disruptions(client: httpx.AsyncClient):
         }
 
 
+HUB_STATIONS = ["UT", "ASD", "RTD", "GVC", "SHL", "ZL", "EHV", "AMF", "AH", "HT"]
+
+
+async def _poll_hub_departures(client: httpx.AsyncClient):
+    global trains_state
+    now = time.time()
+    changed = False
+    for st in HUB_STATIONS[:6]:
+        try:
+            data = await _fetch_json(client, "/reisinformatie-api/api/v2/departures", params={"station": st, "maxJourneys": 40})
+            if not data or "payload" not in data:
+                continue
+            deps = data["payload"].get("departures", [])
+            for d in deps:
+                prod = d.get("product") or {}
+                t_num_str = prod.get("number")
+                if not (t_num_str and t_num_str.isdigit()):
+                    continue
+                tid = int(t_num_str)
+                planned_dt = d.get("plannedDateTime")
+                actual_dt = d.get("actualDateTime")
+                if planned_dt and actual_dt:
+                    try:
+                        p_dt = datetime.fromisoformat(planned_dt)
+                        a_dt = datetime.fromisoformat(actual_dt)
+                        sec = int((a_dt - p_dt).total_seconds())
+                        delay_min = max(0, int((sec + 30) // 60))
+                        train_delays[tid] = {
+                            "delay": delay_min,
+                            "delay_seconds": sec,
+                            "updated_at": now
+                        }
+                        if tid in trains_registry:
+                            if trains_registry[tid].get("delay") != delay_min:
+                                trains_registry[tid]["delay"] = delay_min
+                                changed = True
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+    if changed and trains_registry:
+        t_list = list(trains_registry.values())
+        delayed_c = sum(1 for t in t_list if t.get("delay", 0) > 0)
+        pct = round(((len(t_list) - delayed_c) / len(t_list)) * 100) if t_list else 100
+        trains_state["delayed_count"] = delayed_c
+        trains_state["punctuality_pct"] = pct
+        await _broadcast_trains(trains_state)
+
+
+async def _prefetch_active_journeys(client: httpx.AsyncClient, max_batch: int = 3):
+    now = time.time()
+    t_keys = list(trains_registry.keys())
+    candidates = [
+        tid for tid in t_keys
+        if tid not in train_delays or (now - train_delays[tid].get("updated_at", 0)) > 120
+    ]
+    if not candidates:
+        return
+    for tid in candidates[:max_batch]:
+        t_item = trains_registry.get(tid, {})
+        await _fetch_and_cache_journey(client, tid, t_item.get("lat"), t_item.get("lng"))
+        await asyncio.sleep(0.15)
+
+
 async def _background_poller():
     global _backoff
     disr_ticks = 0
+    hub_ticks = 0
     async with httpx.AsyncClient(http2=False) as client:
         await _ensure_tracks(client)
         await _ensure_stations(client)
         await _poll_disruptions(client)
+        await _poll_hub_departures(client)  # Initial quick seed of fleet delays
         while True:
             # Fall back to REST vehicle endpoint only when ZeroMQ has been quiet for > 15s
             if (time.time() - last_zmq_msg_time) >= 15.0:
                 await _poll_trains(client)
+
+            # Continuous background prefetch for active trains so journeys and delays are instantly ready
+            await _prefetch_active_journeys(client, max_batch=3)
+
+            hub_ticks += 1
+            if hub_ticks >= 6:  # poll hub departures every ~30s (6 * 5s)
+                await _poll_hub_departures(client)
+                hub_ticks = 0
+
             disr_ticks += 1
             if disr_ticks >= 12:  # refresh disruptions every ~60s (12 * 5s)
                 await _poll_disruptions(client)
                 disr_ticks = 0
+
             await asyncio.sleep(POLL_INTERVAL + _backoff)
 
 
@@ -889,6 +1049,141 @@ async def api_weather():
     return JSONResponse({"timestamp": now, "count": 0, "corridors": []})
 
 
+async def _fetch_and_cache_journey(client: httpx.AsyncClient, train_id: int, lat: float | None = None, lng: float | None = None) -> dict | None:
+    now = time.time()
+    cache_key = f"{train_id}_{round(lat or 0, 3)}_{round(lng or 0, 3)}"
+    if cache_key in journey_cache and (now - journey_cache[cache_key][0]) < 12:
+        return journey_cache[cache_key][1]
+
+    data = await _fetch_json(client, "/reisinformatie-api/api/v2/journey", params={"train": train_id})
+    if not data or "payload" not in data:
+        return None
+
+    payload = data["payload"]
+    raw_stops = payload.get("stops", [])
+    parsed_stops = []
+    operator_name = ""
+    category_name = ""
+
+    route_stations = []
+    for s in raw_stops:
+        st_info = s.get("stop") or {}
+        s_id = s.get("id") or ""
+        st_code = st_info.get("stationCode") or ""
+        code = (s_id.split("_")[0] if s_id else st_code).lower()
+        lat_val = st_info.get("lat")
+        lng_val = st_info.get("lng")
+        if code:
+            route_stations.append({
+                "code": code,
+                "name": st_info.get("name") or "",
+                "lat": float(lat_val) if lat_val is not None else None,
+                "lng": float(lng_val) if lng_val is not None else None,
+                "status": s.get("status") or "",
+            })
+
+    route_geometry = _build_route_geometry(route_stations)
+
+    for s in raw_stops:
+        st_info = s.get("stop") or {}
+        arr = (s.get("arrivals") or [{}])[0] if s.get("arrivals") else {}
+        dep = (s.get("departures") or [{}])[0] if s.get("departures") else {}
+        prod = dep.get("product") or arr.get("product") or {}
+        if prod:
+            operator_name = operator_name or prod.get("operatorName", "")
+            category_name = category_name or prod.get("longCategoryName") or prod.get("shortCategoryName") or ""
+
+        planned_arr = arr.get("plannedTime")
+        actual_arr = arr.get("actualTime")
+        planned_dep = dep.get("plannedTime")
+        actual_dep = dep.get("actualTime")
+
+        # Remove all stations where the train does not stop (skipped stations)
+        if not (planned_arr or planned_dep or actual_arr or actual_dep):
+            continue
+
+        delay = dep.get("delayInSeconds") if dep.get("delayInSeconds") is not None else arr.get("delayInSeconds", 0)
+        planned_track = dep.get("plannedTrack") or arr.get("plannedTrack") or ""
+        actual_track = dep.get("actualTrack") or arr.get("actualTrack") or planned_track
+        track_changed = bool(actual_track and planned_track and actual_track != planned_track)
+        track = actual_track or planned_track or ""
+        t_iso = actual_dep or planned_dep or actual_arr or planned_arr or ""
+        s_id = s.get("id") or ""
+        st_code = st_info.get("stationCode") or ""
+        st_code_clean = (s_id.split("_")[0] if s_id else st_code).lower()
+
+        parsed_stops.append({
+            "id": s.get("id"),
+            "code": st_code_clean,
+            "name": st_info.get("name") or "",
+            "lat": st_info.get("lat"),
+            "lng": st_info.get("lng"),
+            "status": "STOP",
+            "planned_arrival": planned_arr,
+            "actual_arrival": actual_arr,
+            "planned_departure": planned_dep,
+            "actual_departure": actual_dep,
+            "time_iso": t_iso,
+            "time": t_iso[11:16] if len(t_iso) >= 16 else "",
+            "delay_minutes": round((delay or 0) / 60),
+            "track": track,
+            "planned_track": planned_track,
+            "actual_track": actual_track,
+            "track_changed": track_changed,
+            "cancelled": bool(arr.get("cancelled", False) or dep.get("cancelled", False)),
+        })
+
+    origin = parsed_stops[0]["name"] if parsed_stops else ""
+    destination = parsed_stops[-1]["name"] if parsed_stops else ""
+
+    # Robust spatial & timeline progress resolution
+    next_idx = _resolve_journey_station_progress(parsed_stops, lat, lng)
+    next_stop = parsed_stops[next_idx] if next_idx is not None and next_idx < len(parsed_stops) else None
+    current_delay = next_stop["delay_minutes"] if next_stop else 0
+
+    stock_info = payload.get("actualStock") or payload.get("plannedStock") or {}
+    train_parts = stock_info.get("trainParts", [])
+    image_url = None
+    if train_parts and train_parts[0].get("image"):
+        image_url = train_parts[0]["image"].get("uri")
+
+    composition = []
+    for p in train_parts:
+        composition.append({
+            "identifier": p.get("stockIdentifier", ""),
+            "type": p.get("stockType", stock_info.get("trainType", "")),
+            "facilities": p.get("facilities", []),
+            "image": p.get("image", {}).get("uri") if p.get("image") else None,
+        })
+
+    result = {
+        "train_id": train_id,
+        "origin": origin,
+        "destination": destination,
+        "next_stop": next_stop,
+        "current_delay": current_delay,
+        "operator": operator_name or "NS",
+        "category_name": category_name,
+        "train_type": stock_info.get("trainType", ""),
+        "seats": stock_info.get("numberOfSeats", 0),
+        "parts": stock_info.get("numberOfParts", 0),
+        "image_url": image_url,
+        "composition": composition,
+        "stops": parsed_stops,
+        "route_stations": route_stations,
+        "route_geometry": route_geometry,
+    }
+    journey_cache[cache_key] = (now, result)
+    train_delays[train_id] = {
+        "delay": current_delay,
+        "delay_seconds": current_delay * 60,
+        "updated_at": now
+    }
+    if train_id in trains_registry:
+        trains_registry[train_id]["delay"] = current_delay
+    return result
+
+
 @app.get("/api/journey/{train_id}")
 async def api_journey(train_id: int, lat: float | None = None, lng: float | None = None):
     # Lookup live GPS position from active registry if not provided in query
@@ -897,131 +1192,10 @@ async def api_journey(train_id: int, lat: float | None = None, lng: float | None
         lat = live_t.get("lat")
         lng = live_t.get("lng")
 
-    now = time.time()
-    cache_key = f"{train_id}_{round(lat or 0, 3)}_{round(lng or 0, 3)}"
-    if cache_key in journey_cache and (now - journey_cache[cache_key][0]) < 12:
-        return JSONResponse(journey_cache[cache_key][1])
-
     async with httpx.AsyncClient(http2=False) as client:
-        data = await _fetch_json(client, "/reisinformatie-api/api/v2/journey", params={"train": train_id})
-        if not data or "payload" not in data:
+        result = await _fetch_and_cache_journey(client, train_id, lat, lng)
+        if not result:
             return JSONResponse({"error": f"Journey data not found for train {train_id}"}, status_code=404)
-
-        payload = data["payload"]
-        raw_stops = payload.get("stops", [])
-        parsed_stops = []
-        operator_name = ""
-        category_name = ""
-
-        route_stations = []
-        for s in raw_stops:
-            st_info = s.get("stop") or {}
-            s_id = s.get("id") or ""
-            st_code = st_info.get("stationCode") or ""
-            code = (s_id.split("_")[0] if s_id else st_code).lower()
-            lat_val = st_info.get("lat")
-            lng_val = st_info.get("lng")
-            if code:
-                route_stations.append({
-                    "code": code,
-                    "name": st_info.get("name") or "",
-                    "lat": float(lat_val) if lat_val is not None else None,
-                    "lng": float(lng_val) if lng_val is not None else None,
-                    "status": s.get("status") or "",
-                })
-
-        route_geometry = _build_route_geometry(route_stations)
-
-        for s in raw_stops:
-            st_info = s.get("stop") or {}
-            arr = (s.get("arrivals") or [{}])[0] if s.get("arrivals") else {}
-            dep = (s.get("departures") or [{}])[0] if s.get("departures") else {}
-            prod = dep.get("product") or arr.get("product") or {}
-            if prod:
-                operator_name = operator_name or prod.get("operatorName", "")
-                category_name = category_name or prod.get("longCategoryName") or prod.get("shortCategoryName") or ""
-
-            planned_arr = arr.get("plannedTime")
-            actual_arr = arr.get("actualTime")
-            planned_dep = dep.get("plannedTime")
-            actual_dep = dep.get("actualTime")
-
-            # Remove all stations where the train does not stop (skipped stations)
-            if not (planned_arr or planned_dep or actual_arr or actual_dep):
-                continue
-
-            delay = dep.get("delayInSeconds") if dep.get("delayInSeconds") is not None else arr.get("delayInSeconds", 0)
-            planned_track = dep.get("plannedTrack") or arr.get("plannedTrack") or ""
-            actual_track = dep.get("actualTrack") or arr.get("actualTrack") or planned_track
-            track_changed = bool(actual_track and planned_track and actual_track != planned_track)
-            track = actual_track or planned_track or ""
-            t_iso = actual_dep or planned_dep or actual_arr or planned_arr or ""
-            s_id = s.get("id") or ""
-            st_code = st_info.get("stationCode") or ""
-            st_code_clean = (s_id.split("_")[0] if s_id else st_code).lower()
-
-            parsed_stops.append({
-                "id": s.get("id"),
-                "code": st_code_clean,
-                "name": st_info.get("name") or "",
-                "lat": st_info.get("lat"),
-                "lng": st_info.get("lng"),
-                "status": "STOP",
-                "planned_arrival": planned_arr,
-                "actual_arrival": actual_arr,
-                "planned_departure": planned_dep,
-                "actual_departure": actual_dep,
-                "time_iso": t_iso,
-                "time": t_iso[11:16] if len(t_iso) >= 16 else "",
-                "delay_minutes": round((delay or 0) / 60),
-                "track": track,
-                "planned_track": planned_track,
-                "actual_track": actual_track,
-                "track_changed": track_changed,
-                "cancelled": bool(arr.get("cancelled", False) or dep.get("cancelled", False)),
-            })
-
-        origin = parsed_stops[0]["name"] if parsed_stops else ""
-        destination = parsed_stops[-1]["name"] if parsed_stops else ""
-
-        # Robust spatial & timeline progress resolution
-        next_idx = _resolve_journey_station_progress(parsed_stops, lat, lng)
-        next_stop = parsed_stops[next_idx] if next_idx is not None and next_idx < len(parsed_stops) else None
-        current_delay = next_stop["delay_minutes"] if next_stop else 0
-
-        stock_info = payload.get("actualStock") or payload.get("plannedStock") or {}
-        train_parts = stock_info.get("trainParts", [])
-        image_url = None
-        if train_parts and train_parts[0].get("image"):
-            image_url = train_parts[0]["image"].get("uri")
-
-        composition = []
-        for p in train_parts:
-            composition.append({
-                "identifier": p.get("stockIdentifier", ""),
-                "type": p.get("stockType", stock_info.get("trainType", "")),
-                "facilities": p.get("facilities", []),
-                "image": p.get("image", {}).get("uri") if p.get("image") else None,
-            })
-
-        result = {
-            "train_id": train_id,
-            "origin": origin,
-            "destination": destination,
-            "next_stop": next_stop,
-            "current_delay": current_delay,
-            "operator": operator_name or "NS",
-            "category_name": category_name,
-            "train_type": stock_info.get("trainType", ""),
-            "seats": stock_info.get("numberOfSeats", 0),
-            "parts": stock_info.get("numberOfParts", 0),
-            "image_url": image_url,
-            "composition": composition,
-            "stops": parsed_stops,
-            "route_stations": route_stations,
-            "route_geometry": route_geometry,
-        }
-        journey_cache[cache_key] = (now, result)
         return JSONResponse(result)
 
 

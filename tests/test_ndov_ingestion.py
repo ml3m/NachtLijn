@@ -40,16 +40,20 @@ def _build_trein_xml(train_blocks: list[dict]) -> str:
 @pytest.fixture(autouse=True)
 def clean_registry():
     app.trains_registry.clear()
+    app.train_delays.clear()
     app.trains_state = {
         "timestamp": 0,
         "next_update_at": 0,
         "count": 0,
         "counts": {"IC": 0, "SPR": 0, "other": 0},
+        "delayed_count": 0,
+        "punctuality_pct": 100,
         "status": "starting",
         "trains": [],
     }
     yield
     app.trains_registry.clear()
+    app.train_delays.clear()
 
 
 def test_parse_ndov_xml_valid_single_train():
@@ -290,3 +294,80 @@ def test_parse_ndov_xml_pruning_stale_trains():
     # 777 must have been pruned (> 80s stale), 888 must be present
     assert 777 not in app.trains_registry
     assert 888 in app.trains_registry
+
+
+# ── Tests for DVS Ingestion & Delay Tracking ────────────────────────
+
+def test_parse_iso_duration_seconds_all_variants():
+    """Verify ISO duration parser accurately parses seconds, minutes, hours, and negative delays."""
+    assert app._parse_iso_duration_seconds("PT3M8S") == 188
+    assert app._parse_iso_duration_seconds("PT44S") == 44
+    assert app._parse_iso_duration_seconds("PT0S") == 0
+    assert app._parse_iso_duration_seconds("PT1H2M3S") == 3723
+    assert app._parse_iso_duration_seconds("-PT30S") == -30
+    assert app._parse_iso_duration_seconds("None") == 0
+    assert app._parse_iso_duration_seconds("") == 0
+    assert app._parse_iso_duration_seconds(None) == 0
+    assert app._parse_iso_duration_seconds("MALFORMED") == 0
+
+
+def test_parse_dvs_xml_populates_delays_and_updates_registry():
+    """Verify DVS XML message updates train_delays and trains_registry."""
+    now = 1700000000.0
+    now_iso = datetime.fromtimestamp(now, tz=timezone.utc).isoformat()
+
+    # Pre-register train 6089 on radar
+    gps_xml = _build_trein_xml([
+        {"trein_nummer": "6089", "cabs": [{"lat": "52.0", "lng": "5.0", "gps_time": now_iso}]}
+    ])
+    app._parse_ndov_xml(gps_xml, now)
+    assert 6089 in app.trains_registry
+    assert app.trains_registry[6089]["delay"] == 0
+
+    # Ingest DVS update: 6089 is delayed by PT4M30S (4.5 min -> 5 min)
+    dvs_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<PutReisInformatieBoodschapIn xmlns="urn:ndov:cdm:trein:reisinformatie:messages:5">
+  <ReisInformatieProductDVS xmlns="urn:ndov:cdm:trein:reisinformatie:data:4">
+    <DynamischeVertrekStaat>
+      <Trein>
+        <TreinNummer>6089</TreinNummer>
+      </Trein>
+      <ExacteVertrekVertraging>PT4M30S</ExacteVertrekVertraging>
+    </DynamischeVertrekStaat>
+  </ReisInformatieProductDVS>
+</PutReisInformatieBoodschapIn>"""
+
+    changed = app._parse_dvs_xml(dvs_xml, now)
+    assert changed is True
+    assert 6089 in app.train_delays
+    assert app.train_delays[6089]["delay"] == 5
+    assert app.train_delays[6089]["delay_seconds"] == 270
+    assert app.trains_registry[6089]["delay"] == 5
+
+
+def test_fleet_punctuality_calculation_with_mixed_delays():
+    """Verify delayed_count and punctuality_pct calculation across fleet."""
+    now = 1700000000.0
+    now_iso = datetime.fromtimestamp(now, tz=timezone.utc).isoformat()
+
+    # Pre-seed delays: train 100 has 0 delay, 101 has 3m delay, 102 has 0 delay, 103 has 6m delay
+    app.train_delays[101] = {"delay": 3, "delay_seconds": 180, "updated_at": now}
+    app.train_delays[103] = {"delay": 6, "delay_seconds": 360, "updated_at": now}
+
+    gps_xml = _build_trein_xml([
+        {"trein_nummer": "100", "cabs": [{"lat": "52.0", "lng": "5.0", "gps_time": now_iso}]},
+        {"trein_nummer": "101", "cabs": [{"lat": "52.1", "lng": "5.1", "gps_time": now_iso}]},
+        {"trein_nummer": "102", "cabs": [{"lat": "52.2", "lng": "5.2", "gps_time": now_iso}]},
+        {"trein_nummer": "103", "cabs": [{"lat": "52.3", "lng": "5.3", "gps_time": now_iso}]},
+    ])
+
+    app._parse_ndov_xml(gps_xml, now)
+    assert app.trains_state["count"] == 4
+    # 2 out of 4 trains are delayed
+    assert app.trains_state["delayed_count"] == 2
+    assert app.trains_state["punctuality_pct"] == 50
+    assert app.trains_registry[101]["delay"] == 3
+    assert app.trains_registry[103]["delay"] == 6
+    assert app.trains_registry[100]["delay"] == 0
+    assert app.trains_registry[102]["delay"] == 0
+

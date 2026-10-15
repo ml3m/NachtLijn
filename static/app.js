@@ -475,10 +475,17 @@
         </div>
       `;
     } else {
+      const delayMin = (t && t.delay !== undefined) ? t.delay : ((markers[t.id] && markers[t.id].delay) || 0);
+      const delayClass = delayMin > 0 ? "delayed" : "ontime";
+      const delayText = delayMin > 0 ? `+${delayMin} min vertraging` : "Op tijd";
       routeHtml = `
         <div class="popup-route-container" id="route-box-${t.id}">
-          <div style="font-size:11.5px;color:#8fa8cc;text-align:center;padding:4px;">
-            🔄 Route en dienstregeling ophalen…
+          <div class="popup-status-delay" style="margin-bottom:4px;">
+            <span style="color:#8fa8cc;">Status:</span>
+            <span class="delay-pill ${delayClass}">${delayText}</span>
+          </div>
+          <div style="font-size:11px;color:#8fa8cc;text-align:center;padding:2px;">
+            🔄 Dienstregeling laden…
           </div>
         </div>
       `;
@@ -982,13 +989,64 @@
     }
   }
 
+  // ── Background Fleet Journey & Delay Prefetcher ─────────────────
+  const journeyPrefetchQueue = [];
+  const queuedTrainSet = new Set();
+  let isPrefetchingJourneys = false;
+
+  function queueJourneyPrefetches(trainIds) {
+    if (!trainIds || !Array.isArray(trainIds)) return;
+    for (const tid of trainIds) {
+      if (!journeyCache[tid] && !queuedTrainSet.has(tid)) {
+        queuedTrainSet.add(tid);
+        journeyPrefetchQueue.push(tid);
+      }
+    }
+    pumpJourneyPrefetchQueue();
+  }
+
+  async function pumpJourneyPrefetchQueue() {
+    if (isPrefetchingJourneys || journeyPrefetchQueue.length === 0) return;
+    isPrefetchingJourneys = true;
+
+    while (journeyPrefetchQueue.length > 0) {
+      const tid = journeyPrefetchQueue.shift();
+      queuedTrainSet.delete(tid);
+      if (journeyCache[tid]) continue;
+
+      const m = markers[tid];
+      const pos = m ? (m.displayed || m.target) : null;
+      try {
+        let url = `/api/journey/${tid}`;
+        if (pos && pos.lat) url += `?lat=${pos.lat.toFixed(5)}&lng=${pos.lng.toFixed(5)}`;
+        const r = await fetch(url);
+        if (r.ok) {
+          const j = await r.json();
+          journeyCache[tid] = j;
+          if (m && j.current_delay !== undefined) {
+            m.delay = j.current_delay;
+          }
+          updateMarkerVisibility();
+        }
+      } catch (_) {}
+      // Pacing interval between background requests
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    isPrefetchingJourneys = false;
+  }
+
   async function fetchJourneyForCache(trainId, pos) {
     try {
       let url = `/api/journey/${trainId}`;
       if (pos && pos.lat) url += `?lat=${pos.lat.toFixed(5)}&lng=${pos.lng.toFixed(5)}`;
       const r = await fetch(url);
       if (r.ok) {
-        journeyCache[trainId] = await r.json();
+        const j = await r.json();
+        journeyCache[trainId] = j;
+        if (markers[trainId] && j.current_delay !== undefined) {
+          markers[trainId].delay = j.current_delay;
+        }
+        updateMarkerVisibility();
       }
     } catch (_) {}
   }
@@ -2381,6 +2439,16 @@
     $countSpr.textContent = counts.SPR;
     $countOther.textContent = counts.other;
 
+    if (data.punctuality_pct !== undefined && $punctualityText) {
+      $punctualityText.textContent = `${data.punctuality_pct}% Op tijd`;
+      if ($punctualityDot) {
+        $punctualityDot.className = data.punctuality_pct < 90 ? "punctuality-dot warn" : "punctuality-dot";
+      }
+    }
+    if (data.delayed_count !== undefined && $countDelayedTrains) {
+      $countDelayedTrains.textContent = String(data.delayed_count);
+    }
+
     const isNewServerFix = (data.timestamp && data.timestamp > lastServerTimestamp);
     if (isNewServerFix) {
       lastServerTimestamp = data.timestamp;
@@ -2415,6 +2483,7 @@
           existing.heading = t.heading;
           existing.type = t.type;
           existing.source = t.source;
+          existing.delay = (t.delay !== undefined) ? t.delay : (existing.delay || 0);
           existing.lastSeen = now;
           existing.history = [[targetPos.lat, targetPos.lng]];
           existing.marker.setLatLng([targetPos.lat, targetPos.lng]);
@@ -2431,6 +2500,7 @@
           existing.heading = t.heading;
           existing.type = t.type;
           existing.source = t.source;
+          existing.delay = (t.delay !== undefined) ? t.delay : (existing.delay || 0);
           existing.lastSeen = now;
 
           // Push to motion trail history only when actively in motion
@@ -2524,6 +2594,7 @@
           type: t.type,
           source: t.source,
           id: t.id,
+          delay: (t.delay !== undefined) ? t.delay : 0,
           lastSeen: now,
         };
       }
@@ -2547,6 +2618,10 @@
       followedTrainId = tid;
       updateFollowButtons();
       window.openJourney(tid);
+    }
+
+    if (data.trains && data.trains.length > 0) {
+      queueJourneyPrefetches(data.trains.map(t => t.id));
     }
 
     updateSpeedLeaderboard();
@@ -3063,6 +3138,8 @@
       COLOR_OTHER,
       PROVINCE_COLORS,
       getProvinceColor,
+      journeyCache,
+      queueJourneyPrefetches,
     };
   }
 
