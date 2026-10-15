@@ -68,6 +68,13 @@
 
   L.control.layers(baseMaps, null, { position: "topright" }).addTo(map);
 
+  map.on("dragstart", () => {
+    if (followedTrainId !== null) {
+      followedTrainId = null;
+      updateFollowButtons();
+    }
+  });
+
   // ── DOM refs ─────────────────────────────────────────────────────
   const $count        = document.getElementById("train-count");
   const $countIc      = document.getElementById("count-ic");
@@ -93,8 +100,12 @@
   const $drawerSub    = document.getElementById("drawer-sub");
   const $drawerStock  = document.getElementById("drawer-stock");
   const $drawerTimeline = document.getElementById("drawer-timeline");
+  const $drawerFollow   = document.getElementById("drawer-follow-btn");
 
   // ── State ────────────────────────────────────────────────────────
+  const activeRouteLayer = L.layerGroup().addTo(map);
+  let followedTrainId = null;
+  let activeSelectedTrainId = null;
   const markers = {};                // id -> { marker, polyline, history:[], displayed:{lat,lng}, target:{lat,lng}, prev:{lat,lng}, ... }
   const visibleTypes = { IC: true, SPR: true, other: true };
   const trackIndex = {};             // "f_code_t_code" -> [[lat, lng], [lat, lng], ...]
@@ -243,7 +254,12 @@
           </div>
         </div>
 
-        <button class="popup-btn" onclick="window.openJourney(${t.id})">📜 Bekijk Volledige Dienstregeling</button>
+        <div class="popup-actions-row">
+          <button class="popup-btn btn-follow ${followedTrainId === t.id ? 'active' : ''}" id="follow-btn-${t.id}" onclick="window.toggleFollowTrain(${t.id})">
+            ${followedTrainId === t.id ? '⏹️ Stop' : '🎯 Volg Trein'}
+          </button>
+          <button class="popup-btn" onclick="window.openJourney(${t.id})">📜 Dienstregeling</button>
+        </div>
       </div>
     `;
   }
@@ -251,6 +267,7 @@
   // Opens popup and loads journey details asynchronously
   async function openTrainPopup(trainId) {
     openPopupId = trainId;
+    activeSelectedTrainId = trainId;
     const m = markers[trainId];
     if (!m) return;
 
@@ -258,6 +275,10 @@
     const cached = journeyCache[trainId];
     m.marker.getPopup().setContent(renderTrainCard(m, cached));
     m.marker.openPopup();
+    if (cached) {
+      drawActiveTrainRoute(trainId, cached);
+    }
+    updateFollowButtons();
 
     // 2. Fetch fresh journey if not cached
     if (!cached) {
@@ -270,6 +291,7 @@
         if (!r.ok) return;
         const jData = await r.json();
         journeyCache[trainId] = jData;
+        drawActiveTrainRoute(trainId, jData);
 
         // If this train's popup is still open, smoothly update the route container
         if (openPopupId === trainId && m.marker.isPopupOpen()) {
@@ -308,6 +330,134 @@
       } catch (_) {}
     }
   }
+
+  // ── Active Route Tracing & Train Following ──────────────────────
+  function drawActiveTrainRoute(trainId, journey) {
+    activeRouteLayer.clearLayers();
+    if (!journey || !journey.stops || journey.stops.length < 2) return;
+
+    const m = markers[trainId];
+    const trainPos = m ? (m.displayed || m.target) : null;
+    const stops = journey.stops.filter((s) => s.lat != null && s.lng != null);
+    if (stops.length < 2) return;
+
+    const nextIdx = stops.findIndex((s) => s.state === "next");
+    const activeIdx = nextIdx !== -1 ? nextIdx : stops.length - 1;
+
+    // 1. Passed route track (stops[0] .. stops[activeIdx-1] and train current pos)
+    const passedCoords = [];
+    for (let i = 0; i < activeIdx; i++) {
+      passedCoords.push([stops[i].lat, stops[i].lng]);
+    }
+    if (trainPos && activeIdx > 0) {
+      passedCoords.push([trainPos.lat, trainPos.lng]);
+    }
+    if (passedCoords.length >= 2) {
+      L.polyline(passedCoords, {
+        color: "#8fa8cc",
+        weight: 3.5,
+        opacity: 0.45,
+        dashArray: "5, 8",
+        lineCap: "round",
+        interactive: false,
+      }).addTo(activeRouteLayer);
+    }
+
+    // 2. Remaining active route track (train current pos .. stops[activeIdx] .. destination)
+    const remainingCoords = [];
+    if (trainPos) {
+      remainingCoords.push([trainPos.lat, trainPos.lng]);
+    }
+    for (let i = activeIdx; i < stops.length; i++) {
+      remainingCoords.push([stops[i].lat, stops[i].lng]);
+    }
+    if (remainingCoords.length >= 2) {
+      // Outer ambient glow in NS yellow
+      L.polyline(remainingCoords, {
+        color: "rgba(255, 201, 23, 0.35)",
+        weight: 8,
+        opacity: 0.85,
+        lineCap: "round",
+        interactive: false,
+      }).addTo(activeRouteLayer);
+
+      // Core crisp path
+      L.polyline(remainingCoords, {
+        color: "#FFC917",
+        weight: 3.8,
+        opacity: 0.95,
+        lineCap: "round",
+        interactive: false,
+      }).addTo(activeRouteLayer);
+    }
+
+    // 3. Station waypoints along the route path
+    stops.forEach((s, idx) => {
+      const isPast = idx < activeIdx;
+      const isNext = idx === activeIdx;
+      const isDest = idx === stops.length - 1;
+
+      const fillColor = isDest ? "#00e676" : (isNext ? "#FFC917" : (isPast ? "#5577aa" : "#ffffff"));
+      const radius = isNext ? 6.5 : (isDest ? 5.5 : 4);
+
+      const circle = L.circleMarker([s.lat, s.lng], {
+        radius: radius,
+        fillColor: fillColor,
+        color: "#ffffff",
+        weight: isNext ? 2.5 : 1.5,
+        fillOpacity: 1,
+        className: isNext ? "pulse-stop-marker" : "",
+      });
+
+      const delayInfo = s.delay_minutes > 0 ? ` (+${s.delay_minutes} min)` : "";
+      circle.bindTooltip(`<b>${s.name}</b><br/>${s.time || "—"}${delayInfo}${s.track ? ` · Spoor ${s.track}` : ""}`, {
+        direction: "top",
+        offset: [0, -6],
+        className: "route-stop-tooltip",
+      });
+
+      circle.addTo(activeRouteLayer);
+    });
+  }
+
+  function updateFollowButtons() {
+    if (openPopupId !== null) {
+      const btn = document.getElementById(`follow-btn-${openPopupId}`);
+      if (btn) {
+        if (followedTrainId === openPopupId) {
+          btn.classList.add("active");
+          btn.innerHTML = "⏹️ Stop";
+        } else {
+          btn.classList.remove("active");
+          btn.innerHTML = "🎯 Volg Trein";
+        }
+      }
+    }
+    if ($drawerFollow && activeSelectedTrainId !== null) {
+      if (followedTrainId === activeSelectedTrainId) {
+        $drawerFollow.classList.add("active");
+        $drawerFollow.innerHTML = "⏹️ Stop";
+      } else {
+        $drawerFollow.classList.remove("active");
+        $drawerFollow.innerHTML = "🎯 Volg";
+      }
+    }
+  }
+
+  window.toggleFollowTrain = function (trainId) {
+    if (followedTrainId === trainId) {
+      followedTrainId = null;
+    } else {
+      followedTrainId = trainId;
+      activeSelectedTrainId = trainId;
+      const m = markers[trainId];
+      if (m) {
+        const p = m.displayed || m.target;
+        map.panTo([p.lat, p.lng], { animate: true, duration: 0.6 });
+      }
+    }
+    updateFollowButtons();
+  };
 
   // ── Geo math ─────────────────────────────────────────────────────
   function distanceMeters(lat1, lng1, lat2, lng2) {
@@ -810,11 +960,20 @@
 
   // ── Journey Timeline Drawer ──────────────────────────────────────
   window.openJourney = async function (trainId) {
+    activeSelectedTrainId = trainId;
     $drawer.classList.remove("drawer-closed");
     $drawerTitle.textContent = `Trein ${trainId}`;
     $drawerSub.textContent = `Dienstregeling en haltes ophalen…`;
     $drawerStock.style.display = "none";
     $drawerTimeline.innerHTML = `<div class="timeline-empty">Haltes laden…</div>`;
+
+    // Automatically close open map popup to prevent visual overlap
+    if (openPopupId !== null) {
+      const pm = markers[openPopupId];
+      if (pm && pm.marker) pm.marker.closePopup();
+      openPopupId = null;
+    }
+    updateFollowButtons();
 
     const m = markers[trainId];
     if (m) {
@@ -832,6 +991,8 @@
       if (!r.ok) throw new Error("Not found");
       const data = await r.json();
       journeyCache[trainId] = data;
+      drawActiveTrainRoute(trainId, data);
+      updateFollowButtons();
 
       $drawerTitle.textContent = `${categoryLabel(data.train_type || "Trein")} ${trainId}`;
       $drawerSub.textContent = `${data.origin || ""} ➔ ${data.destination || ""}`;
@@ -925,7 +1086,23 @@
 
   $drawerClose.addEventListener("click", () => {
     $drawer.classList.add("drawer-closed");
+    if (openPopupId === null) {
+      activeRouteLayer.clearLayers();
+      activeSelectedTrainId = null;
+    }
+    if (followedTrainId && followedTrainId === activeSelectedTrainId) {
+      followedTrainId = null;
+      updateFollowButtons();
+    }
   });
+
+  if ($drawerFollow) {
+    $drawerFollow.addEventListener("click", () => {
+      if (activeSelectedTrainId !== null) {
+        window.toggleFollowTrain(activeSelectedTrainId);
+      }
+    });
+  }
 
   // ── Filter Buttons ───────────────────────────────────────────────
   document.querySelectorAll(".filter-pill").forEach(btn => {
@@ -1156,6 +1333,14 @@
 
         marker.on("popupclose", () => {
           if (openPopupId === t.id) openPopupId = null;
+          if ($drawer.classList.contains("drawer-closed")) {
+            activeRouteLayer.clearLayers();
+            activeSelectedTrainId = null;
+            if (followedTrainId === t.id) {
+              followedTrainId = null;
+              updateFollowButtons();
+            }
+          }
         });
 
         markers[t.id] = {
@@ -1237,6 +1422,11 @@
       m.displayed.lat = lat;
       m.displayed.lng = lng;
       m.marker.setLatLng([lat, lng]);
+
+      // If user is following this train, pan map camera along smoothly
+      if (followedTrainId !== null && Number(id) === followedTrainId) {
+        map.panTo([lat, lng], { animate: false });
+      }
 
       // Keep motion trail synced with head
       if (showTrails && m.polyline && m.history.length > 0) {

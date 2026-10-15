@@ -254,6 +254,14 @@ html, body, #map { width: 100%; height: 100%; overflow: hidden; font-family: 'Se
 .telemetry-label { color: #7799bb; font-size: 10px; text-transform: uppercase; font-weight: 600; }
 .telemetry-val { color: #ffffff; font-weight: 600; font-variant-numeric: tabular-nums; }
 
+.popup-actions-row {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+}
+.popup-actions-row .popup-btn {
+  flex: 1;
+}
 .popup-btn {
   display: block; width: 100%; padding: 8px 10px;
   background: var(--ns-blue); color: var(--ns-yellow); border: 1px solid var(--ns-yellow);
@@ -261,6 +269,22 @@ html, body, #map { width: 100%; height: 100%; overflow: hidden; font-family: 'Se
   cursor: pointer; transition: all 0.2s;
 }
 .popup-btn:hover { background: var(--ns-yellow); color: var(--ns-blue); }
+.popup-btn.btn-follow {
+  background: rgba(0, 48, 130, 0.45);
+  color: #c5d8f5;
+  border-color: rgba(74, 158, 255, 0.4);
+}
+.popup-btn.btn-follow:hover {
+  background: var(--ns-blue);
+  color: var(--ns-yellow);
+  border-color: var(--ns-yellow);
+}
+.popup-btn.btn-follow.active {
+  background: var(--ns-yellow);
+  color: var(--ns-blue);
+  border-color: #ffffff;
+  box-shadow: 0 0 10px rgba(255, 201, 23, 0.6);
+}
 
 /* ── Station Dots & NS Departure Board Popup ───────────────────── */
 .station-dot {
@@ -379,6 +403,22 @@ html, body, #map { width: 100%; height: 100%; overflow: hidden; font-family: 'Se
 .drawer-badge.other { background: var(--ns-other); color: #fff; }
 #drawer-title { font-size: 16px; font-weight: 700; color: #ffffff; }
 .drawer-sub { font-size: 11.5px; color: #8fa8cc; margin-top: 2px; }
+.drawer-header-actions {
+  display: flex; align-items: center; gap: 8px;
+}
+.drawer-follow-btn {
+  background: rgba(255, 201, 23, 0.15);
+  border: 1px solid rgba(255, 201, 23, 0.45);
+  color: var(--ns-yellow);
+  font-size: 11px; font-weight: 800;
+  padding: 4px 10px; border-radius: 6px;
+  cursor: pointer; transition: all 0.2s;
+  display: flex; align-items: center; gap: 4px;
+}
+.drawer-follow-btn:hover, .drawer-follow-btn.active {
+  background: var(--ns-yellow); color: var(--ns-blue);
+  box-shadow: 0 0 12px rgba(255, 201, 23, 0.6);
+}
 .drawer-close {
   background: none; border: none; color: #8fa8cc; font-size: 24px;
   cursor: pointer; line-height: 1; padding: 0 4px;
@@ -524,3 +564,27 @@ html, body, #map { width: 100%; height: 100%; overflow: hidden; font-family: 'Se
 }
 .leaflet-control-layers label { color: #c5d5ea; margin-bottom: 4px; cursor: pointer; }
 .leaflet-control-layers label:hover { color: #4a9eff; }
+
+/* ── Active Route Layer Styling ────────────────────────────────── */
+.route-stop-tooltip {
+  background: rgba(0, 20, 56, 0.94) !important;
+  border: 1px solid rgba(255, 201, 23, 0.5) !important;
+  color: #ffffff !important;
+  font-size: 11px !important;
+  border-radius: 5px !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6) !important;
+  padding: 4px 8px !important;
+  line-height: 1.35 !important;
+}
+.route-stop-tooltip::before {
+  border-top-color: rgba(255, 201, 23, 0.5) !important;
+}
+
+.pulse-stop-marker {
+  animation: pulse-stop-glow 1.6s infinite ease-in-out;
+}
+@keyframes pulse-stop-glow {
+  0% { filter: drop-shadow(0 0 2px #FFC917); }
+  50% { filter: drop-shadow(0 0 8px #FFC917); }
+  100% { filter: drop-shadow(0 0 2px #FFC917); }
+}
