@@ -1184,17 +1184,21 @@
 
     if (!stationsLayer) {
       stationsLayer = L.layerGroup();
+      const MEGA_CODES = new Set(["ASD", "UT", "RTD", "GVC", "SHL", "EHV"]);
+
       for (const s of stationsData) {
         if (s.country && s.country !== "NL") continue;
 
-        const isMega = s.type === "MEGA_STATION";
-        const isHub = isMega || s.type === "KNOOPPUNT_INTERCITY_STATION" || s.type === "INTERCITY_STATION";
+        const codeUpper = (s.code || "").toUpperCase();
+        const typeUpper = (s.type || "").toUpperCase();
+        const isMega = typeUpper === "MEGA_STATION" || MEGA_CODES.has(codeUpper);
+        const isHub = isMega || typeUpper.includes("INTERCITY") || typeUpper.includes("SNELTREIN");
         const dotClass = isMega ? "station-dot mega" : (isHub ? "station-dot hub" : "station-dot");
-        const iconSize = isMega ? [13, 13] : (isHub ? [11, 11] : [7, 7]);
+        const iconSize = isMega ? [15, 15] : (isHub ? [11, 11] : [7, 7]);
 
         const m = L.marker([s.lat, s.lng], {
           icon: L.divIcon({ className: dotClass, iconSize: iconSize }),
-          zIndexOffset: isMega ? 70 : (isHub ? 50 : 0)
+          zIndexOffset: isMega ? 100 : (isHub ? 50 : 0)
         });
 
         // Tooltip on hover

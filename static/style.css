@@ -610,28 +610,30 @@ html, body, #map { width: 100%; height: 100%; overflow: hidden; font-family: 'Se
 .station-dot {
   width: 7px !important; height: 7px !important;
   margin-left: -3.5px !important; margin-top: -3.5px !important;
-  background: var(--ns-white); border-radius: 50%;
-  border: 1.5px solid var(--ns-blue);
-  box-shadow: 0 0 5px rgba(255, 255, 255, 0.8), 0 0 8px rgba(0, 48, 130, 0.5);
+  background: #ffffff !important; border-radius: 50% !important;
+  border: 1.5px solid #003082 !important;
+  box-shadow: 0 0 5px rgba(255, 255, 255, 0.8), 0 0 8px rgba(0, 48, 130, 0.5) !important;
   cursor: pointer !important;
   transition: none !important;
-  transform-origin: center center;
+  transform-origin: center center !important;
 }
 .station-dot.hub {
-  width: 10px !important; height: 10px !important;
-  margin-left: -5px !important; margin-top: -5px !important;
-  background: var(--ns-yellow); border: 2px solid var(--ns-blue);
-  box-shadow: 0 0 8px var(--ns-yellow), 0 0 12px rgba(255, 201, 23, 0.7);
+  width: 11px !important; height: 11px !important;
+  margin-left: -5.5px !important; margin-top: -5.5px !important;
+  background: #FFC917 !important;
+  border: 2px solid #003082 !important;
+  box-shadow: 0 0 8px #FFC917, 0 0 14px rgba(255, 201, 23, 0.75) !important;
 }
 .station-dot.mega {
-  width: 13px !important; height: 13px !important;
-  margin-left: -6.5px !important; margin-top: -6.5px !important;
-  background: var(--ns-yellow); border: 2.5px solid var(--ns-blue);
-  box-shadow: 0 0 0 2px rgba(255, 201, 23, 0.5), 0 0 12px var(--ns-yellow), 0 0 18px rgba(255, 201, 23, 0.9);
+  width: 15px !important; height: 15px !important;
+  margin-left: -7.5px !important; margin-top: -7.5px !important;
+  background: #FFC917 !important;
+  border: 2.5px solid #003082 !important;
+  box-shadow: 0 0 0 2.5px rgba(255, 201, 23, 0.65), 0 0 12px #FFC917, 0 0 22px rgba(255, 201, 23, 0.95) !important;
 }
 .station-dot:hover {
-  background: var(--ns-yellow);
-  box-shadow: 0 0 0 5px rgba(255, 201, 23, 0.45), 0 0 14px var(--ns-yellow);
+  background: #FFC917 !important;
+  box-shadow: 0 0 0 5px rgba(255, 201, 23, 0.45), 0 0 14px #FFC917 !important;
   z-index: 999;
   transform: scale(1.35);
   transition: transform 0.1s ease;
