@@ -2448,4 +2448,11 @@
   setInterval(updateNachtnetStatus, 60000);
   setInterval(updateSpeedLeaderboard, 3000);
 
+  // Register PWA Service Worker
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("/static/sw.js").catch(() => {});
+    });
+  }
+
 })();
