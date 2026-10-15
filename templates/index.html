@@ -69,11 +69,15 @@
     </div>
   </div>
 
-  <!-- Search Input -->
+  <!-- Search Input & Autocomplete Dropdown -->
   <div id="search-wrap">
-    <span id="search-icon">🔍</span>
-    <input id="search-input" type="text" placeholder="Train nr (e.g. 3583)…" inputmode="numeric" />
+    <div class="search-field-container">
+      <span id="search-icon">🔍</span>
+      <input id="search-input" type="text" placeholder="Zoek trein (nr) of station (naam)…" autocomplete="off" />
+      <button id="search-clear-btn" class="search-clear-btn" style="display:none;" title="Wissen">×</button>
+    </div>
     <div id="search-feedback"></div>
+    <div id="search-dropdown" class="search-dropdown" style="display:none;"></div>
   </div>
 
   <!-- Toggles -->

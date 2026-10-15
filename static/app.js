@@ -85,6 +85,8 @@
   const $cdText       = document.getElementById("countdown-text");
   const $search       = document.getElementById("search-input");
   const $feedback     = document.getElementById("search-feedback");
+  const $searchDropdown = document.getElementById("search-dropdown");
+  const $searchClear  = document.getElementById("search-clear-btn");
   const $borderCb     = document.getElementById("border-cb");
   const $trailsCb     = document.getElementById("trails-cb");
   const $stationCb    = document.getElementById("stations-cb");
@@ -1745,28 +1747,204 @@
     requestAnimationFrame(updateCountdown);
   }
 
-  // ── Search ───────────────────────────────────────────────────────
-  $search.addEventListener("keydown", (e) => {
-    if (e.key !== "Enter") return;
-    const q = $search.value.trim();
+  // ── Universal Train & Station Search with Real-Time Autocomplete ──
+  let highlightedSearchIndex = -1;
+  let currentSearchResults = [];
+
+  function performSearch(query) {
+    const q = (query || "").trim().toLowerCase();
     $feedback.textContent = "";
-    if (!q) return;
-    const id = Number(q);
-    const entry = markers[id];
-    if (entry) {
-      const cat = trainCategory(entry.type);
-      if (!visibleTypes[cat]) {
-        visibleTypes[cat] = true;
-        document.querySelector(`.filter-pill[data-type="${cat}"]`).classList.add("active");
-        updateMarkerVisibility();
+
+    if (!q) {
+      closeSearchDropdown();
+      return;
+    }
+
+    const results = [];
+
+    // 1. Match Active Live Trains by ID
+    for (const id in markers) {
+      const tidStr = String(id);
+      if (tidStr.includes(q)) {
+        const m = markers[id];
+        const j = journeyCache[id];
+        const route = j ? `${j.origin || ""} ➔ ${j.destination || ""}` : `${m.speed.toFixed(0)} km/h`;
+        const cat = trainCategory(m.type);
+        results.push({
+          type: "train",
+          id: Number(id),
+          title: `Trein ${id}`,
+          subtitle: route,
+          badge: cat.toUpperCase(),
+          cat: cat
+        });
       }
-      map.flyTo([entry.displayed.lat, entry.displayed.lng], 14, { duration: 1.2 });
-      setTimeout(() => {
-        openTrainPopup(id);
-      }, 1300);
-    } else {
-      $feedback.textContent = `Trein ${q} niet gevonden`;
-      setTimeout(() => { $feedback.textContent = ""; }, 3000);
+      if (results.length >= 4) break;
+    }
+
+    // 2. Match Stations by Name or Station Code
+    if (stationsData && stationsData.length > 0) {
+      for (const s of stationsData) {
+        if (s.country && s.country !== "NL") continue;
+        const name = (s.name || "").toLowerCase();
+        const code = (s.code || "").toLowerCase();
+
+        if (name.includes(q) || code === q || code.startsWith(q)) {
+          const isHub = s.type === "KNOOPPUNT_INTERCITY_STATION" || s.type === "INTERCITY_STATION";
+          results.push({
+            type: "station",
+            code: s.code,
+            station: s,
+            title: s.name,
+            subtitle: `Station · ${s.code.toUpperCase()}`,
+            badge: isHub ? "IC STATION" : "STATION"
+          });
+        }
+        if (results.length >= 8) break;
+      }
+    }
+
+    renderSearchResults(results);
+  }
+
+  function renderSearchResults(results) {
+    currentSearchResults = results;
+    highlightedSearchIndex = -1;
+
+    if (!results || results.length === 0) {
+      $searchDropdown.innerHTML = `<div style="padding:10px;font-size:11px;color:#8fa8cc;text-align:center;">Geen treinen of stations gevonden</div>`;
+      $searchDropdown.style.display = "block";
+      return;
+    }
+
+    let html = "";
+    results.forEach((r, idx) => {
+      const icon = r.type === "train" ? "🚆" : "🚉";
+      html += `
+        <div class="search-result-item" data-idx="${idx}">
+          <div class="item-title">
+            <span>${icon}</span>
+            <span style="font-weight:700;">${r.title}</span>
+            <span class="item-code">${r.subtitle}</span>
+          </div>
+          <span class="item-tag">${r.badge}</span>
+        </div>
+      `;
+    });
+
+    $searchDropdown.innerHTML = html;
+    $searchDropdown.style.display = "block";
+
+    $searchDropdown.querySelectorAll(".search-result-item").forEach((el) => {
+      el.addEventListener("click", () => {
+        const idx = Number(el.getAttribute("data-idx"));
+        selectSearchResult(currentSearchResults[idx]);
+      });
+    });
+  }
+
+  function updateHighlightedItem() {
+    const items = $searchDropdown.querySelectorAll(".search-result-item");
+    items.forEach((item, idx) => {
+      if (idx === highlightedSearchIndex) {
+        item.classList.add("highlighted");
+        item.scrollIntoView({ block: "nearest" });
+      } else {
+        item.classList.remove("highlighted");
+      }
+    });
+  }
+
+  function selectSearchResult(item) {
+    if (!item) return;
+    closeSearchDropdown();
+    $search.value = item.title;
+    if ($searchClear) $searchClear.style.display = "block";
+
+    if (item.type === "train") {
+      const id = item.id;
+      const entry = markers[id];
+      if (entry) {
+        const cat = trainCategory(entry.type);
+        if (!visibleTypes[cat]) {
+          visibleTypes[cat] = true;
+          const filterBtn = document.querySelector(`.filter-pill[data-type="${cat}"]`);
+          if (filterBtn) filterBtn.classList.add("active");
+          updateMarkerVisibility();
+        }
+        map.flyTo([entry.displayed.lat, entry.displayed.lng], 13, { duration: 1.2 });
+        followedTrainId = id;
+        updateFollowButtons();
+        window.openJourney(id);
+      } else {
+        window.openJourney(id);
+      }
+    } else if (item.type === "station") {
+      window.focusStation(item.code);
+    }
+  }
+
+  function closeSearchDropdown() {
+    $searchDropdown.style.display = "none";
+    currentSearchResults = [];
+    highlightedSearchIndex = -1;
+  }
+
+  $search.addEventListener("input", () => {
+    const val = $search.value;
+    if ($searchClear) $searchClear.style.display = val ? "block" : "none";
+    performSearch(val);
+  });
+
+  $search.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") {
+      if (currentSearchResults.length > 0) {
+        highlightedSearchIndex = (highlightedSearchIndex + 1) % currentSearchResults.length;
+        updateHighlightedItem();
+        e.preventDefault();
+      }
+    } else if (e.key === "ArrowUp") {
+      if (currentSearchResults.length > 0) {
+        highlightedSearchIndex = (highlightedSearchIndex - 1 + currentSearchResults.length) % currentSearchResults.length;
+        updateHighlightedItem();
+        e.preventDefault();
+      }
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (highlightedSearchIndex >= 0 && currentSearchResults[highlightedSearchIndex]) {
+        selectSearchResult(currentSearchResults[highlightedSearchIndex]);
+      } else if (currentSearchResults.length > 0) {
+        selectSearchResult(currentSearchResults[0]);
+      } else {
+        const q = $search.value.trim();
+        if (!q) return;
+        const id = Number(q);
+        if (!isNaN(id) && markers[id]) {
+          selectSearchResult({ type: "train", id: id });
+        } else {
+          $feedback.textContent = `Trein of station "${q}" niet gevonden`;
+          setTimeout(() => { $feedback.textContent = ""; }, 3500);
+        }
+      }
+    } else if (e.key === "Escape") {
+      closeSearchDropdown();
+    }
+  });
+
+  if ($searchClear) {
+    $searchClear.addEventListener("click", () => {
+      $search.value = "";
+      $searchClear.style.display = "none";
+      $feedback.textContent = "";
+      closeSearchDropdown();
+      $search.focus();
+    });
+  }
+
+  document.addEventListener("click", (e) => {
+    const wrap = document.getElementById("search-wrap");
+    if (wrap && !wrap.contains(e.target)) {
+      closeSearchDropdown();
     }
   });
 
