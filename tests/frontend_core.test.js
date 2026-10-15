@@ -547,4 +547,29 @@ test("formatDelayStatus handles cancelled journeys", () => {
   assert.equal(res.isDelayed, false);
 });
 
+// ── Tests for Follow Train Persistence across Map Interactions ───────
+
+test("follow mode persists when user moves the map until STOP is pressed", () => {
+  // 1. Start following train 2972
+  core.toggleFollowTrain(2972);
+  assert.equal(core.getFollowedTrainId(), 2972, "Train 2972 must be followed");
+  assert.equal(core.isCameraTracking(), true, "Camera tracking must be active initially");
+
+  // 2. User moves / drags the map (pausing auto-pan)
+  core.setCameraTracking(false);
+  assert.equal(core.getFollowedTrainId(), 2972, "Followed train card must NOT disappear when moving map");
+  assert.equal(core.isCameraTracking(), false, "Camera auto-pan paused during manual pan");
+
+  // 3. User re-centers camera
+  core.setCameraTracking(true);
+  assert.equal(core.getFollowedTrainId(), 2972, "Followed train must remain active");
+  assert.equal(core.isCameraTracking(), true, "Camera tracking resumed");
+
+  // 4. User presses STOP
+  core.toggleFollowTrain(2972);
+  assert.equal(core.getFollowedTrainId(), null, "Follow mode must only exit when user presses STOP");
+  assert.equal(core.isCameraTracking(), false);
+});
+
+
 

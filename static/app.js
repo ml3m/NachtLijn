@@ -91,14 +91,63 @@
 
   L.control.layers(baseMaps, null, { position: "topright" }).addTo(map);
 
+  let followedTrainId = null;
+  let isCameraTracking = true;
+  let isUserInteractingWithMap = false;
+  let resumeTrackingTimer = null;
+  let activeSelectedTrainId = null;
+  let activeDockTrainId = null;
+
+  function setCameraTracking(enabled) {
+    isCameraTracking = enabled;
+    const btn = document.getElementById("cockpit-recenter-btn");
+    if (btn) {
+      btn.style.display = (followedTrainId !== null && !enabled) ? "inline-flex" : "none";
+    }
+  }
+
+  function recenterCameraOnFollowedTrain() {
+    if (followedTrainId !== null && markers[followedTrainId]) {
+      const m = markers[followedTrainId];
+      const p = m.displayed || m.target;
+      map.panTo([p.lat, p.lng], { animate: true, duration: 0.5 });
+      setCameraTracking(true);
+    }
+  }
+
   map.on("dragstart", () => {
+    isUserInteractingWithMap = true;
     if (followedTrainId !== null) {
-      followedTrainId = null;
-      updateFollowButtons();
+      setCameraTracking(false);
+      if (resumeTrackingTimer) clearTimeout(resumeTrackingTimer);
     }
   });
 
+  map.on("dragend", () => {
+    isUserInteractingWithMap = false;
+    if (followedTrainId !== null) {
+      if (resumeTrackingTimer) clearTimeout(resumeTrackingTimer);
+      resumeTrackingTimer = setTimeout(() => {
+        if (followedTrainId !== null && !isUserInteractingWithMap) {
+          recenterCameraOnFollowedTrain();
+        }
+      }, 10000);
+    }
+  });
+
+  map.on("zoomstart", () => {
+    isUserInteractingWithMap = true;
+  });
+
+  map.on("zoomend", () => {
+    isUserInteractingWithMap = false;
+  });
+
   map.on("click", () => {
+    // When following a train, moving or clicking the map must NOT dismiss the card
+    if (followedTrainId !== null) {
+      return;
+    }
     if (activeDockTrainId !== null || activeSelectedTrainId !== null) {
       closeTrainDock();
       setSelectedTrain(null);
@@ -149,6 +198,7 @@
   const $cockpitNextName  = document.getElementById("cockpit-next-name");
   const $cockpitDistance  = document.getElementById("cockpit-distance");
   const $cockpitStopBtn   = document.getElementById("cockpit-stop-btn");
+  const $cockpitRecenterBtn= document.getElementById("cockpit-recenter-btn");
   const $cockpitJourneyBtn= document.getElementById("cockpit-journey-btn");
   const $cockpitInfoClick = document.getElementById("cockpit-info-click");
   const $audioBtn         = document.getElementById("audio-toggle-btn");
@@ -173,9 +223,6 @@
   let lastAnnouncedStopKey = null;
 
   const activeRouteLayer = L.layerGroup().addTo(map);
-  let followedTrainId = null;
-  let activeSelectedTrainId = null;
-  let activeDockTrainId = null;
   const markers = {};                // id -> { marker, polyline, history:[], displayed:{lat,lng}, target:{lat,lng}, prev:{lat,lng}, ... }
   const visibleTypes = { IC: true, SPR: true, other: true };
   const trackIndex = {};             // "f_code_t_code" -> [[lat, lng], [lat, lng], ...]
@@ -959,6 +1006,9 @@
       hideCockpitHUD();
     }
     document.body.classList.toggle("following-train", followedTrainId !== null);
+    if ($cockpitRecenterBtn) {
+      $cockpitRecenterBtn.style.display = (followedTrainId !== null && !isCameraTracking) ? "inline-flex" : "none";
+    }
     const targetId = activeDockTrainId !== null ? activeDockTrainId : openPopupId;
     if (targetId !== null) {
       const btn = document.getElementById(`follow-btn-${targetId}`);
@@ -986,14 +1036,19 @@
   window.toggleFollowTrain = function (trainId) {
     if (followedTrainId === trainId) {
       followedTrainId = null;
+      setCameraTracking(false);
+      if (resumeTrackingTimer) clearTimeout(resumeTrackingTimer);
       hideCockpitHUD();
-      if ($drawer.classList.contains("drawer-closed") && activeDockTrainId === null) {
+      closeTrainDock();
+      if ($drawer.classList.contains("drawer-closed")) {
         activeRouteLayer.clearLayers();
         setSelectedTrain(null);
         activeRouteData = null;
       }
     } else {
       followedTrainId = trainId;
+      setCameraTracking(true);
+      if (resumeTrackingTimer) clearTimeout(resumeTrackingTimer);
       setSelectedTrain(trainId);
       playNSChime();
       const m = markers[trainId];
@@ -1152,6 +1207,11 @@
       }
     });
   }
+  if ($cockpitRecenterBtn) {
+    $cockpitRecenterBtn.addEventListener("click", () => {
+      recenterCameraOnFollowedTrain();
+    });
+  }
   if ($cockpitJourneyBtn) {
     $cockpitJourneyBtn.addEventListener("click", () => {
       if (followedTrainId !== null) {
@@ -1162,7 +1222,7 @@
   if ($cockpitInfoClick) {
     $cockpitInfoClick.addEventListener("click", () => {
       if (followedTrainId !== null) {
-        window.openJourney(followedTrainId);
+        recenterCameraOnFollowedTrain();
       }
     });
   }
@@ -2424,14 +2484,16 @@
   $drawerClose.addEventListener("click", () => {
     $drawer.classList.add("drawer-closed");
     updateUrlParam("train", null);
+    if (followedTrainId !== null) {
+      if (markers[followedTrainId]) {
+        openTrainPopup(followedTrainId);
+      }
+      return;
+    }
     if (activeDockTrainId === null && openPopupId === null) {
       activeRouteLayer.clearLayers();
       setSelectedTrain(null);
       activeRouteData = null;
-    }
-    if (followedTrainId && followedTrainId === activeSelectedTrainId) {
-      followedTrainId = null;
-      updateFollowButtons();
     }
   });
 
@@ -2737,6 +2799,10 @@
 
         marker.on("click", (e) => {
           if (e && e.originalEvent) e.originalEvent.stopPropagation();
+          if (followedTrainId === t.id) {
+            recenterCameraOnFollowedTrain();
+            return;
+          }
           if (activeSelectedTrainId === t.id && $trainDock && $trainDock.classList.contains("open")) {
             closeTrainDock();
             setSelectedTrain(null);
@@ -2859,9 +2925,11 @@
         }
       }
 
-      // If user is following this train, pan map camera along smoothly
+      // If user is following this train, pan map camera along smoothly when camera tracking is active
       if (followedTrainId !== null && Number(id) === followedTrainId) {
-        map.panTo([lat, lng], { animate: false });
+        if (isCameraTracking && !isUserInteractingWithMap) {
+          map.panTo([lat, lng], { animate: false });
+        }
         updateCockpitHUD(m);
       }
 
@@ -3320,6 +3388,10 @@
       checkTrainDisruption,
       DELAY_THRESHOLD_MIN,
       formatDelayStatus,
+      getFollowedTrainId: () => followedTrainId,
+      isCameraTracking: () => isCameraTracking,
+      setCameraTracking,
+      toggleFollowTrain: (tid) => window.toggleFollowTrain(tid),
       setDisruptionsDataForTest: (data) => { disruptionsData = data; },
     };
   }
