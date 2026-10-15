@@ -25,3 +25,6 @@ server.log
 
 # Cloned submodules / legacy tests
 ns-api/
+
+# Runtime data caches
+data/delays.json

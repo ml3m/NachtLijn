@@ -867,6 +867,7 @@ async def _background_poller():
         await _ensure_tracks(client)
         await _ensure_stations(client)
         await _poll_disruptions(client)
+        await _poll_hub_departures(client)
         while True:
             # Fall back to REST vehicle endpoint only when ZeroMQ has been quiet for > 15s
             if (time.time() - last_zmq_msg_time) >= 15.0:
@@ -890,11 +891,6 @@ async def _background_poller():
 async def lifespan(app: FastAPI):
     global _poll_task, _zmq_task
     _load_delays()
-    # Pre-seed network delay state across all provinces BEFORE serving traffic
-    async with httpx.AsyncClient(http2=False) as client:
-        await _ensure_tracks(client)
-        await _ensure_stations(client)
-        await _poll_hub_departures(client)
     _poll_task = asyncio.create_task(_background_poller())
     _zmq_task = asyncio.create_task(_ndov_zeromq_consumer())
     yield
