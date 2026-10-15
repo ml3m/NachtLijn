@@ -318,6 +318,44 @@ async def test_journey_handles_zero_stops(monkeypatch):
     assert data["next_stop"] is None
 
 
+@pytest.mark.asyncio
+async def test_journey_with_speed_and_cancellation(monkeypatch):
+    """Journey API accepts speed parameter and sets cancelled flag when run is cancelled."""
+    app.journey_cache.clear()
+
+    raw_payload = {
+        "payload": {
+            "cancelled": True,
+            "stops": [
+                {
+                    "id": "ut_1",
+                    "stop": {"name": "Utrecht Centraal", "stationCode": "UT", "lat": 52.0894, "lng": 5.1100},
+                    "departures": [{"actualTime": "2026-10-16T12:00:00+0200", "cancelled": True}],
+                },
+                {
+                    "id": "asd_2",
+                    "stop": {"name": "Amsterdam Centraal", "stationCode": "ASD", "lat": 52.3791, "lng": 4.9003},
+                    "arrivals": [{"actualTime": "2026-10-16T12:30:00+0200", "cancelled": True}],
+                }
+            ]
+        }
+    }
+
+    async def fake_fetch_json(client, path, params=None):
+        return raw_payload
+
+    monkeypatch.setattr(app, "_fetch_json", fake_fetch_json)
+
+    response = await app.api_journey(2145, lat=52.1, lng=5.05, speed=130.0)
+    assert response.status_code == 200
+    data = json.loads(response.body)
+    assert data["cancelled"] is True
+    assert len(data["stops"]) == 2
+    assert data["stops"][0]["cancelled"] is True
+    assert data["stops"][1]["cancelled"] is True
+
+
+
 # ── Tests for api_weather ────────────────────────────────────────────
 
 @pytest.mark.asyncio

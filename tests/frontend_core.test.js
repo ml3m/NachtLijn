@@ -12,11 +12,20 @@ const mockElement = () => ({
   querySelectorAll: () => [],
 });
 
+const storageMap = new Map();
+globalThis.sessionStorage = {
+  getItem: (k) => storageMap.get(k) || null,
+  setItem: (k, v) => storageMap.set(k, String(v)),
+  removeItem: (k) => storageMap.delete(k),
+  clear: () => storageMap.clear(),
+};
+
 globalThis.window = {
   __TEST_ENV__: true,
   location: { search: "" },
   history: { replaceState: () => {} },
   addEventListener: () => {},
+  sessionStorage: globalThis.sessionStorage,
 };
 
 globalThis.document = {
@@ -319,4 +328,174 @@ test("fetchJourneyForCache fetches and caches train journey on demand", async ()
     globalThis.fetch = originalFetch;
   }
 });
+
+// ── Tests for Track Tangent Angle Locking ───────────────────────────
+
+test("snapToTrack computes tangent bearing and respects heading direction", () => {
+  // Populate spatial grid with an East-West rail line
+  const p1 = [52.0, 5.0];
+  const p2 = [52.0, 5.2];
+  core.trackFeatures.push([p1, p2]);
+  const fIdx = core.trackFeatures.length - 1;
+  const sIdx = 0;
+
+  const seg = [p1[0], p1[1], p2[0], p2[1], fIdx, sIdx];
+  const gx = Math.floor(5.1 / core.GRID_CELL_SIZE);
+  const gy = Math.floor(52.0 / core.GRID_CELL_SIZE);
+  core.trackSpatialGrid[`${gx}_${gy}`] = [seg];
+
+  // 1. Train moving East (~85° heading)
+  const snapEast = core.snapToTrack(52.0001, 5.1, 85);
+  assert.equal(snapEast.snapped, true);
+  assert.equal(snapEast.forward, true);
+  assert.ok(Math.abs(snapEast.bearing - 90) < 3, `Expected ~90° bearing, got ${snapEast.bearing}`);
+
+  // 2. Train moving West (~265° heading) along the same track
+  const snapWest = core.snapToTrack(52.0001, 5.1, 265);
+  assert.equal(snapWest.snapped, true);
+  assert.equal(snapWest.forward, false);
+  assert.ok(Math.abs(snapWest.bearing - 270) < 3, `Expected ~270° bearing, got ${snapWest.bearing}`);
+});
+
+test("advanceAlongTrack computes instantaneous tangent angle along polyline", () => {
+  // L-shaped track: segment 1 goes East, segment 2 turns North
+  const coords = [
+    [52.0, 5.0],
+    [52.0, 5.1], // East
+    [52.1, 5.1]  // North
+  ];
+
+  // Moving along segment 0 (East)
+  const advEast = core.advanceAlongTrack(coords, 0, 0.2, 500, true);
+  assert.ok(advEast.bearing !== undefined);
+  assert.ok(Math.abs(advEast.bearing - 90) < 3, `Expected East (~90°), got ${advEast.bearing}`);
+
+  // Moving along segment 1 (North)
+  const advNorth = core.advanceAlongTrack(coords, 1, 0.2, 500, true);
+  assert.ok(advNorth.bearing !== undefined);
+  assert.ok(Math.abs(advNorth.bearing - 0) < 3 || Math.abs(advNorth.bearing - 360) < 3, `Expected North (~0°), got ${advNorth.bearing}`);
+});
+
+// ── Tests for Dynamic Mid-Track Delay Estimation ────────────────────
+
+test("estimateMidTrackDelay accurately detects ETA vs timetable delays", () => {
+  const nowMs = Date.now();
+
+  // 1. Train running on time or ahead: distance 10km, speed 120km/h => travel time 5 min.
+  // Planned arrival is 10 min in the future => delay = 0
+  const plannedFutureIso = new Date(nowMs + 10 * 60 * 1000).toISOString();
+  const delayAhead = core.estimateMidTrackDelay(10000, 120, plannedFutureIso);
+  assert.equal(delayAhead, 0);
+
+  // 2. Train running late mid-track: distance 20km, speed 100km/h => travel time 12 min.
+  // Planned arrival is only 5 min in the future => delay = 7 min
+  const plannedNearIso = new Date(nowMs + 5 * 60 * 1000).toISOString();
+  const delayLate = core.estimateMidTrackDelay(20000, 100, plannedNearIso);
+  assert.ok(delayLate >= 6 && delayLate <= 8, `Expected ~7m delay, got ${delayLate}`);
+
+  // 3. Stationary or crawling train (<10 km/h) does not trigger spurious dynamic delays
+  const delayStopped = core.estimateMidTrackDelay(20000, 4, plannedNearIso);
+  assert.equal(delayStopped, 0);
+
+  // 4. Invalid or null planned times return 0 safely
+  assert.equal(core.estimateMidTrackDelay(20000, 100, null), 0);
+  assert.equal(core.estimateMidTrackDelay(20000, 100, "non-date"), 0);
+  assert.equal(core.estimateMidTrackDelay(20, 100, plannedNearIso), 0); // distance < 50m
+});
+
+// ── Tests for SessionStorage Journey Caching & TTL ──────────────────
+
+test("getCachedJourney and setCachedJourney respect TTL and restore across sessions", () => {
+  const testJourney = {
+    train_id: 77771,
+    origin: "Eindhoven Centraal",
+    destination: "Utrecht Centraal",
+    current_delay: 2,
+    stops: []
+  };
+
+  // 1. Cache item
+  core.setCachedJourney(77771, testJourney);
+  assert.equal(core.getCachedJourney(77771).origin, "Eindhoven Centraal");
+
+  // 2. Simulate page reload / in-memory cache clear
+  delete core.journeyCache[77771];
+  const restored = core.getCachedJourney(77771);
+  assert.ok(restored, "Must restore journey from sessionStorage");
+  assert.equal(restored.origin, "Eindhoven Centraal");
+
+  // 3. Simulate expired TTL (> 25 minutes)
+  globalThis.sessionStorage.setItem("nachtlijn_journey_77771", JSON.stringify({
+    timestamp: Date.now() - 30 * 60 * 1000,
+    data: testJourney
+  }));
+  delete core.journeyCache[77771];
+  assert.equal(core.getCachedJourney(77771), null, "Expired TTL must return null");
+});
+
+// ── Tests for Disruption Zone Intersection ──────────────────────────
+
+test("checkTrainDisruption detects upcoming route intersections and proximity", () => {
+  // Test with no disruptions loaded
+  assert.equal(core.checkTrainDisruption({ stops: [] }, null), null);
+
+  // Mock disruption data in global scope
+  const mockDisruption = {
+    id: "disr-901",
+    title: "Seinstoring tussen Utrecht en Amsterdam",
+    cause: "Defect spoor",
+    sections: [
+      [
+        { code: "ut", name: "Utrecht Centraal", lat: 52.0894, lng: 5.1100 },
+        { code: "asd", name: "Amsterdam Centraal", lat: 52.3791, lng: 4.9003 }
+      ]
+    ]
+  };
+
+  // When disruptions list is empty
+  assert.equal(core.checkTrainDisruption({ stops: [{ code: "asd", state: "next" }] }, null), null);
+
+  // Set active disruption data
+  core.setDisruptionsDataForTest({
+    timestamp: Date.now() / 1000,
+    count: 1,
+    disruptions: [mockDisruption]
+  });
+
+  // 1. Train scheduled to stop at 'asd' next (matching disruption corridor)
+  const journeyUpcoming = {
+    stops: [
+      { code: "ut", state: "passed" },
+      { code: "asd", state: "next" }
+    ]
+  };
+  const matched = core.checkTrainDisruption(journeyUpcoming, null);
+  assert.ok(matched, "Must detect train heading into disruption corridor");
+  assert.equal(matched.id, "disr-901");
+
+  // 2. Train has already passed all disrupted stations
+  const journeyPassed = {
+    stops: [
+      { code: "ut", state: "passed" },
+      { code: "asd", state: "passed" },
+      { code: "hfd", state: "next" }
+    ]
+  };
+  assert.equal(core.checkTrainDisruption(journeyPassed, null), null, "Passed disruption must not trigger alert");
+
+  // 3. Match by coordinate proximity (< 2500m to disruption section)
+  // 500m from Utrecht Centraal (52.0894, 5.1100)
+  const posNearDisruption = { lat: 52.0910, lng: 5.1120 };
+  const matchedProx = core.checkTrainDisruption(null, posNearDisruption);
+  assert.ok(matchedProx, "Must match disruption when within 2500m");
+  assert.equal(matchedProx.id, "disr-901");
+
+  // 4. Far away coordinates with empty journey
+  const posFarAway = { lat: 51.4416, lng: 5.4697 }; // Eindhoven
+  assert.equal(core.checkTrainDisruption(null, posFarAway), null, "Unrelated coordinates must not match");
+
+  // Cleanup test disruption state
+  core.setDisruptionsDataForTest(null);
+});
+
 

@@ -183,6 +183,95 @@
   const trackFeatures = [];          // fIdx -> [ [lat, lng], ... ]
   const GRID_CELL_SIZE = 0.02;       // ~1.5 - 2.2 km 2D spatial grid cell size
   const journeyCache = {};           // trainId -> { origin, destination, next_stop, current_delay, train_type, stops }
+  const JOURNEY_TTL_MS = 25 * 60 * 1000; // 25-minute TTL to keep routes ultra-fresh without re-fetching
+
+  function getCachedJourney(trainId) {
+    if (journeyCache[trainId]) return journeyCache[trainId];
+    try {
+      if (typeof sessionStorage !== "undefined") {
+        const raw = sessionStorage.getItem(`nachtlijn_journey_${trainId}`);
+        if (raw) {
+          const entry = JSON.parse(raw);
+          if (entry && (Date.now() - entry.timestamp) < JOURNEY_TTL_MS && entry.data) {
+            journeyCache[trainId] = entry.data;
+            return entry.data;
+          }
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function setCachedJourney(trainId, data) {
+    if (!trainId || !data) return;
+    journeyCache[trainId] = data;
+    try {
+      if (typeof sessionStorage !== "undefined") {
+        sessionStorage.setItem(`nachtlijn_journey_${trainId}`, JSON.stringify({
+          timestamp: Date.now(),
+          data: data
+        }));
+      }
+    } catch (_) {}
+  }
+
+  // Dynamic dead-reckoning mid-track delay estimation (ETA = dist / speed vs scheduled arrival)
+  function estimateMidTrackDelay(distMeters, speedKmh, plannedIso) {
+    if (!plannedIso || !distMeters || distMeters < 50 || !speedKmh || speedKmh < 10.0) return 0;
+    const plannedMs = new Date(plannedIso).getTime();
+    if (isNaN(plannedMs)) return 0;
+    const travelSec = distMeters / (speedKmh / 3.6);
+    const estArrivalMs = Date.now() + (travelSec * 1000);
+    const diffMin = Math.round((estArrivalMs - plannedMs) / 60000);
+    return diffMin > 0 ? diffMin : 0;
+  }
+
+  // Real-time disruption zone intersection check against train route and position
+  function checkTrainDisruption(journey, currentPos) {
+    if (!disruptionsData || !disruptionsData.disruptions || disruptionsData.disruptions.length === 0) {
+      return null;
+    }
+    const disruptions = disruptionsData.disruptions;
+
+    // 1. Check upcoming stops along journey against disruption corridor stations
+    if (journey && journey.stops && journey.stops.length > 0) {
+      const upcomingCodes = new Set();
+      for (const st of journey.stops) {
+        if (st.state !== "passed" && st.code) {
+          upcomingCodes.add(String(st.code).toLowerCase());
+        }
+      }
+
+      for (const d of disruptions) {
+        for (const sec of (d.sections || [])) {
+          for (const s of sec) {
+            const sc = (s.code || "").toLowerCase();
+            if (sc && upcomingCodes.has(sc)) {
+              return d;
+            }
+          }
+        }
+      }
+    }
+
+    // 2. Fallback: Proximity test against active train position (< 2500m to disruption section)
+    if (currentPos && currentPos.lat && currentPos.lng) {
+      for (const d of disruptions) {
+        for (const sec of (d.sections || [])) {
+          for (const s of sec) {
+            if (s.lat && s.lng) {
+              const dist = distanceMeters(currentPos.lat, currentPos.lng, s.lat, s.lng);
+              if (dist <= 2500) {
+                return d;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return null;
+  }
   let lastServerTimestamp = 0;       // tracks server freshness to prevent back-and-forth jitter
   let eventSource = null;            // SSE push connection
   let isSSEActive = false;
@@ -442,12 +531,29 @@
     const lng = (t.displayed ? t.displayed.lng : t.lng).toFixed(4);
     const isMoving = t.speed >= 1.5;
 
+    const activeDisruption = checkTrainDisruption(journey, t.displayed || t.target || { lat: t.lat, lng: t.lng });
+    let disruptionHtml = "";
+    if (activeDisruption) {
+      disruptionHtml = `
+        <div class="dock-disruption-alert" onclick="window.focusDisruptionById('${activeDisruption.id}')" title="${activeDisruption.cause || activeDisruption.situation || 'Trajectstoring'}">
+          🚨 Let op: Trajectstoring (${activeDisruption.title})
+        </div>
+      `;
+    }
+
     let routeHtml = "";
     if (journey) {
-      const delayClass = journey.current_delay > 0 ? "delayed" : "ontime";
-      const delayText = journey.current_delay > 0 ? `+${journey.current_delay} min vertraging` : "Op tijd";
+      const isCancelled = Boolean(journey.cancelled || (journey.next_stop && journey.next_stop.cancelled));
+      let delayClass = journey.current_delay > 0 ? "delayed" : "ontime";
+      let delayText = journey.current_delay > 0 ? `+${journey.current_delay} min vertraging` : "Op tijd";
+      if (isCancelled) {
+        delayClass = "cancelled";
+        delayText = "🚫 Uitgevallen";
+      }
+
       const isAtDest = journey.next_stop && journey.next_stop.at_destination;
-      const isAtStation = journey.next_stop && journey.next_stop.at_station;
+      // High-speed trains (>15 km/h) are running in transit, not dwelling at station
+      const isAtStation = journey.next_stop && journey.next_stop.at_station && (t.speed || 0) < 15.0;
       let nextLabel = "Volgende:";
       if (isAtDest) {
         nextLabel = "🏁 Eindpunt:";
@@ -504,6 +610,7 @@
           <button class="dock-close-btn" onclick="window.closeTrainDock()" title="Sluiten">&times;</button>
         </div>
 
+        ${disruptionHtml}
         ${routeHtml}
 
         <div class="popup-telemetry-grid">
@@ -550,7 +657,7 @@
     if (!m) return;
 
     // 1. Render immediate card into bottom-left dock with cached journey or placeholder
-    const cached = journeyCache[trainId];
+    const cached = getCachedJourney(trainId);
     if ($trainDock) {
       $trainDock.innerHTML = renderTrainCard(m, cached);
       $trainDock.classList.remove("closed");
@@ -565,48 +672,24 @@
     if (!cached) {
       try {
         let url = `/api/journey/${trainId}`;
+        const params = [];
         if (m && m.target) {
-          url += `?lat=${m.target.lat.toFixed(5)}&lng=${m.target.lng.toFixed(5)}`;
+          params.push(`lat=${m.target.lat.toFixed(5)}`, `lng=${m.target.lng.toFixed(5)}`);
         }
+        if (m && m.speed !== undefined) {
+          params.push(`speed=${m.speed.toFixed(1)}`);
+        }
+        if (params.length > 0) url += `?${params.join("&")}`;
+
         const r = await fetch(url);
         if (!r.ok) return;
         const jData = await r.json();
-        journeyCache[trainId] = jData;
+        setCachedJourney(trainId, jData);
         drawActiveTrainRoute(trainId, jData);
 
-        // If this train's dock is still open, smoothly update the route container
+        // If this train's dock is still open, smoothly update the card
         if (activeDockTrainId === trainId && $trainDock && $trainDock.classList.contains("open")) {
-          const box = document.getElementById(`route-box-${trainId}`);
-          if (box) {
-            const delayClass = jData.current_delay > 0 ? "delayed" : "ontime";
-            const delayText = jData.current_delay > 0 ? `+${jData.current_delay} min vertraging` : "Op tijd";
-            const isAtDest = jData.next_stop && jData.next_stop.at_destination;
-            const isAtStation = jData.next_stop && jData.next_stop.at_station;
-            let nextLabel = "Volgende:";
-            if (isAtDest) {
-              nextLabel = "🏁 Eindpunt:";
-            } else if (isAtStation) {
-              nextLabel = "🚉 Halteert:";
-            }
-            const nextStopName = jData.next_stop ? jData.next_stop.name : (jData.destination || "Eindpunt");
-            const nextStopTrack = jData.next_stop && jData.next_stop.track ? `<span class="ns-track">Spoor ${jData.next_stop.track}</span>` : "";
-
-            box.innerHTML = `
-              <div class="popup-route-line" title="${jData.origin} naar ${jData.destination}">
-                <span>${jData.origin || "—"}</span>
-                <span class="route-arrow">➔</span>
-                <span>${jData.destination || "—"}</span>
-              </div>
-              <div class="popup-next-stop">
-                <span>${nextLabel} <b>${nextStopName}</b></span>
-                ${nextStopTrack}
-              </div>
-              <div class="popup-status-delay">
-                <span style="color:#8fa8cc;">Status:</span>
-                <span class="delay-pill ${delayClass}">${delayText}</span>
-              </div>
-            `;
-          }
+          $trainDock.innerHTML = renderTrainCard(m, jData);
         }
       } catch (_) {}
     }
@@ -932,17 +1015,29 @@
       $cockpitHeading.textContent = `🧭 ${hdg}° · ${headingToCompass(hdg)}`;
     }
 
-    const j = journeyCache[m.id];
+    const j = getCachedJourney(m.id);
     if (j) {
+      const activeDisruption = checkTrainDisruption(j, m.displayed || m.target);
       if ($cockpitRoute) {
         const orig = j.origin || "";
         const dest = j.destination || "";
-        $cockpitRoute.textContent = (orig && dest) ? `${orig} ➔ ${dest}` : (dest || "Onderweg");
+        const baseRoute = (orig && dest) ? `${orig} ➔ ${dest}` : (dest || "Onderweg");
+        if (activeDisruption) {
+          $cockpitRoute.innerHTML = `${baseRoute} <span class="cockpit-disruption-badge" title="${activeDisruption.title}">⚠️ Storing</span>`;
+        } else {
+          $cockpitRoute.textContent = baseRoute;
+        }
       }
 
-      if (j.next_stop) {
+      if (j.cancelled || (j.next_stop && j.next_stop.cancelled)) {
+        if ($cockpitNextName) $cockpitNextName.textContent = j.destination || "—";
+        if ($cockpitDistance) {
+          $cockpitDistance.textContent = "🚫 Rit uitgevallen";
+          $cockpitDistance.style.color = "#ff3344";
+        }
+      } else if (j.next_stop) {
         const ns = j.next_stop;
-        if (ns.at_station && audioEnabled) {
+        if (ns.at_station && audioEnabled && (m.speed || 0) < 15.0) {
           const stopKey = `${m.id}_${ns.name}`;
           if (lastAnnouncedStopKey !== stopKey) {
             lastAnnouncedStopKey = stopKey;
@@ -959,16 +1054,26 @@
           if (ns.at_destination) {
             $cockpitDistance.textContent = "🏁 Eindpunt bereikt";
             $cockpitDistance.style.color = "#FFC917";
-          } else if (ns.at_station) {
+          } else if (ns.at_station && (m.speed || 0) < 15.0) {
             $cockpitDistance.textContent = "🚉 Halteert op station";
             $cockpitDistance.style.color = "#00e676";
           } else if (ns.lat && ns.lng && m.displayed) {
             const distM = distanceMeters(m.displayed.lat, m.displayed.lng, ns.lat, ns.lng);
             const distKm = distM / 1000;
             const distStr = distKm < 1 ? `${Math.round(distM)} m` : `${distKm.toFixed(1)} km`;
-            const dMin = ns.delay_minutes > 0 ? ` (+${ns.delay_minutes}m)` : "";
-            $cockpitDistance.textContent = `📍 nog ${distStr}${dMin}`;
-            $cockpitDistance.style.color = "#00e676";
+
+            // Dynamic mid-track delay estimation
+            const dynDelay = estimateMidTrackDelay(distM, m.speed, ns.planned_arrival || ns.planned_departure || ns.time_iso);
+            if (dynDelay > (ns.delay_minutes || 0) && dynDelay >= 2) {
+              $cockpitDistance.textContent = `📍 nog ${distStr} (+${dynDelay}m geschat)`;
+              $cockpitDistance.style.color = "#FFC917";
+            } else if (ns.delay_minutes > 0) {
+              $cockpitDistance.textContent = `📍 nog ${distStr} (+${ns.delay_minutes}m)`;
+              $cockpitDistance.style.color = "#ff9100";
+            } else {
+              $cockpitDistance.textContent = `📍 nog ${distStr} (op tijd)`;
+              $cockpitDistance.style.color = "#00e676";
+            }
           } else if (ns.time) {
             $cockpitDistance.textContent = `Aankomst: ${ns.time}`;
             $cockpitDistance.style.color = "#8fa8cc";
@@ -992,12 +1097,20 @@
   async function fetchJourneyForCache(trainId, pos) {
     try {
       let url = `/api/journey/${trainId}`;
-      if (pos && pos.lat) url += `?lat=${pos.lat.toFixed(5)}&lng=${pos.lng.toFixed(5)}`;
+      const params = [];
+      if (pos && pos.lat) {
+        params.push(`lat=${pos.lat.toFixed(5)}`, `lng=${pos.lng.toFixed(5)}`);
+      }
+      const m = markers[trainId];
+      if (m && m.speed !== undefined) {
+        params.push(`speed=${m.speed.toFixed(1)}`);
+      }
+      if (params.length > 0) url += `?${params.join("&")}`;
+
       const r = await fetch(url);
       if (r.ok) {
         const j = await r.json();
-        journeyCache[trainId] = j;
-        const m = markers[trainId];
+        setCachedJourney(trainId, j);
         if (m && j.current_delay !== undefined) {
           m.delay = j.current_delay;
         }
@@ -1162,6 +1275,7 @@
     let bestFeat = null;
     let bestSeg = null;
     let bestT = 0;
+    let bestSegCoords = null;
 
     for (let dx = -1; dx <= 1; dx++) {
       for (let dy = -1; dy <= 1; dy++) {
@@ -1193,13 +1307,24 @@
             bestFeat = seg[4];
             bestSeg = seg[5];
             bestT = t;
+            bestSegCoords = [lat1, lng1, lat2, lng2];
           }
         }
       }
     }
 
     // Snap to track centerline if within 95m (standard ProRail corridor tolerance)
-    if (bestDist <= 95 && bestProj) {
+    if (bestDist <= 95 && bestProj && bestSegCoords) {
+      let trackBearing = heading;
+      let forward = true;
+      const segBearing = bearingDeg(bestSegCoords[0], bestSegCoords[1], bestSegCoords[2], bestSegCoords[3]);
+      if (heading !== undefined && heading !== null && !isNaN(heading)) {
+        forward = Math.cos((segBearing - heading) * DEG2RAD) >= 0;
+        trackBearing = forward ? segBearing : ((segBearing + 180) % 360);
+      } else {
+        trackBearing = segBearing;
+      }
+
       return {
         snapped: true,
         lat: bestProj.lat,
@@ -1207,7 +1332,9 @@
         dist: bestDist,
         fIdx: bestFeat,
         sIdx: bestSeg,
-        t: bestT
+        t: bestT,
+        bearing: trackBearing !== undefined ? Math.round(trackBearing * 10) / 10 : undefined,
+        forward: forward
       };
     }
 
@@ -1216,7 +1343,8 @@
       snapped: false,
       lat: lat,
       lng: lng,
-      dist: bestDist
+      dist: bestDist,
+      bearing: (heading !== undefined && heading !== null && !isNaN(heading)) ? heading : undefined
     };
   }
 
@@ -1226,25 +1354,27 @@
     let remDist = distanceMeters;
     let currS = sIdx;
     let currT = t;
+    let lastBearing = undefined;
 
     while (remDist > 0) {
       let p1, p2;
       if (forward) {
         if (currS >= latlngs.length - 1) {
           const last = latlngs[latlngs.length - 1];
-          return { lat: last[0], lng: last[1] };
+          return { lat: last[0], lng: last[1], bearing: lastBearing };
         }
         p1 = latlngs[currS];
         p2 = latlngs[currS + 1];
       } else {
         if (currS < 0) {
           const first = latlngs[0];
-          return { lat: first[0], lng: first[1] };
+          return { lat: first[0], lng: first[1], bearing: lastBearing };
         }
         p1 = latlngs[currS + 1];
         p2 = latlngs[currS];
       }
 
+      lastBearing = Math.round(bearingDeg(p1[0], p1[1], p2[0], p2[1]) * 10) / 10;
       const cosLat = Math.cos(p1[0] * DEG2RAD);
       const segDist = Math.hypot((p2[1] - p1[1]) * cosLat * 111320, (p2[0] - p1[0]) * 110540);
       const availDist = segDist * (1.0 - currT);
@@ -1253,7 +1383,8 @@
         const finalT = currT + (remDist / Math.max(1e-6, segDist));
         return {
           lat: p1[0] + finalT * (p2[0] - p1[0]),
-          lng: p1[1] + finalT * (p2[1] - p1[1])
+          lng: p1[1] + finalT * (p2[1] - p1[1]),
+          bearing: lastBearing
         };
       } else {
         remDist -= availDist;
@@ -1264,7 +1395,7 @@
           currS--;
           if (currS < 0) {
             const first = latlngs[0];
-            return { lat: first[0], lng: first[1] };
+            return { lat: first[0], lng: first[1], bearing: lastBearing };
           }
         }
       }
@@ -1272,10 +1403,16 @@
 
     if (forward) {
       const idx = Math.min(currS, latlngs.length - 1);
-      return { lat: latlngs[idx][0], lng: latlngs[idx][1] };
+      if (idx > 0) {
+        lastBearing = Math.round(bearingDeg(latlngs[idx - 1][0], latlngs[idx - 1][1], latlngs[idx][0], latlngs[idx][1]) * 10) / 10;
+      }
+      return { lat: latlngs[idx][0], lng: latlngs[idx][1], bearing: lastBearing };
     } else {
       const idx = Math.max(0, currS);
-      return { lat: latlngs[idx][0], lng: latlngs[idx][1] };
+      if (idx < latlngs.length - 1) {
+        lastBearing = Math.round(bearingDeg(latlngs[idx + 1][0], latlngs[idx + 1][1], latlngs[idx][0], latlngs[idx][1]) * 10) / 10;
+      }
+      return { lat: latlngs[idx][0], lng: latlngs[idx][1], bearing: lastBearing };
     }
   }
 
@@ -2098,14 +2235,24 @@
     }
 
     try {
-      let url = `/api/journey/${trainId}`;
-      if (m && m.target) {
-        url += `?lat=${m.target.lat.toFixed(5)}&lng=${m.target.lng.toFixed(5)}`;
+      const cached = getCachedJourney(trainId);
+      let data = cached;
+      if (!data) {
+        let url = `/api/journey/${trainId}`;
+        const params = [];
+        if (m && m.target) {
+          params.push(`lat=${m.target.lat.toFixed(5)}`, `lng=${m.target.lng.toFixed(5)}`);
+        }
+        if (m && m.speed !== undefined) {
+          params.push(`speed=${m.speed.toFixed(1)}`);
+        }
+        if (params.length > 0) url += `?${params.join("&")}`;
+
+        const r = await fetch(url);
+        if (!r.ok) throw new Error("Not found");
+        data = await r.json();
+        setCachedJourney(trainId, data);
       }
-      const r = await fetch(url);
-      if (!r.ok) throw new Error("Not found");
-      const data = await r.json();
-      journeyCache[trainId] = data;
       drawActiveTrainRoute(trainId, data);
       updateFollowButtons();
 
@@ -2118,9 +2265,19 @@
 
       // Next station highlight banner
       let bannerHtml = "";
-      if (data.next_stop) {
+      if (data.cancelled) {
+        bannerHtml = `
+          <div class="next-station-banner cancelled">
+            <span class="next-station-tag" style="background:#ff3344;color:#fff;">🚫 Uitgevallen rit / Cancelled</span>
+            <div class="next-station-title">${data.origin || ""} ➔ ${data.destination || ""}</div>
+            <div class="next-station-meta">
+              <span style="color:#ff8888;">Deze treinrit is geannuleerd</span>
+            </div>
+          </div>
+        `;
+      } else if (data.next_stop) {
         const isAtDest = data.next_stop.at_destination;
-        const isAtStation = data.next_stop.at_station;
+        const isAtStation = data.next_stop.at_station && (m ? (m.speed || 0) < 15.0 : true);
         let bannerTag = "📍 Volgende station / Next stop";
         let timeLabel = "Aankomst";
         if (isAtDest) {
@@ -2152,8 +2309,23 @@
         `;
       }
 
+      // Check disruption corridor alert banner
+      const activeDisruption = checkTrainDisruption(data, m ? (m.displayed || m.target) : null);
+      let disruptionBannerHtml = "";
+      if (activeDisruption) {
+        disruptionBannerHtml = `
+          <div class="drawer-disruption-banner" onclick="window.focusDisruptionById('${activeDisruption.id}')">
+            <span style="font-size:14px;">🚨</span>
+            <div style="flex:1;">
+              <div style="font-weight:700;color:#ff3344;font-size:12px;">Let op: Storingsgebied op dit traject</div>
+              <div style="color:#e0e6f0;font-size:11px;">${activeDisruption.title}${activeDisruption.delay ? ` · +${activeDisruption.delay}` : ''}</div>
+            </div>
+          </div>
+        `;
+      }
+
       // Timeline stops (only stopping stations, skipping all non-stopping '--' stations)
-      let stopsHtml = bannerHtml;
+      let stopsHtml = disruptionBannerHtml + bannerHtml;
       const nextIdx = data.stops.findIndex(s => s.state === "next");
 
       data.stops.forEach((s, idx) => {
@@ -2414,6 +2586,18 @@
       const snap = snapToTrack(t.lat, t.lng, t.heading);
       const targetPos = { lat: snap.lat, lng: snap.lng };
 
+      // Tangent angle locking: lock heading to physical track centerline when moving
+      let activeHeading = t.heading;
+      if (t.speed >= 1.5 && snap.snapped && snap.bearing !== undefined) {
+        activeHeading = snap.bearing;
+      } else if (t.speed < 1.5 && existing) {
+        // Stationary train preserves its previous stable heading to prevent spinning
+        activeHeading = existing.heading;
+      } else if (snap.bearing !== undefined) {
+        activeHeading = snap.bearing;
+      }
+      t.heading = activeHeading;
+
       if (existing) {
         const prevDisp = existing.displayed || existing.target;
         const jumpDist = distanceMeters(prevDisp.lat, prevDisp.lng, targetPos.lat, targetPos.lng);
@@ -2620,6 +2804,9 @@
             const adv = advanceAlongTrack(coords, m.snap.sIdx, m.snap.t, distMeters, forward);
             lat = adv.lat;
             lng = adv.lng;
+            if (adv.bearing !== undefined && m.speed >= 1.5) {
+              m.heading = adv.bearing;
+            }
           } else {
             const adv = extrapolate(m.target.lat, m.target.lng, m.speed, m.heading, extrapSec);
             lat = adv.lat;
@@ -2631,6 +2818,14 @@
       m.displayed.lat = lat;
       m.displayed.lng = lng;
       m.marker.setLatLng([lat, lng]);
+
+      // Smoothly rotate chevron wrap with tangent angle along curves at 60fps
+      if (m.marker) {
+        const el = m.marker.getElement();
+        if (el && el.firstElementChild) {
+          el.firstElementChild.style.transform = `rotate(${Math.round(m.heading || 0)}deg)`;
+        }
+      }
 
       // If user is following this train, pan map camera along smoothly
       if (followedTrainId !== null && Number(id) === followedTrainId) {
@@ -3087,6 +3282,11 @@
       getProvinceColor,
       journeyCache,
       fetchJourneyForCache,
+      getCachedJourney,
+      setCachedJourney,
+      estimateMidTrackDelay,
+      checkTrainDisruption,
+      setDisruptionsDataForTest: (data) => { disruptionsData = data; },
     };
   }
 
