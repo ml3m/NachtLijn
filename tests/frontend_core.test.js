@@ -246,3 +246,45 @@ test("advanceAlongTrack clamps to endpoint when distance exceeds segment", () =>
   assert.equal(p.lng, 5.01);
 });
 
+// ── Tests for PROVINCE_COLORS and getProvinceColor ────────────────────
+
+test("PROVINCE_COLORS contains valid hex codes for all 12 provinces", () => {
+  const expectedProvinces = [
+    "Groningen", "Fryslân", "Friesland", "Drenthe", "Overijssel", "Flevoland",
+    "Gelderland", "Utrecht", "Noord-Holland", "North Holland", "Zuid-Holland",
+    "South Holland", "Zeeland", "Noord-Brabant", "North Brabant", "Limburg"
+  ];
+  for (const prov of expectedProvinces) {
+    const col = core.getProvinceColor(prov);
+    assert.match(col, /^#[0-9a-fA-F]{6}$/, `Color for ${prov} must be a valid 6-char hex`);
+  }
+});
+
+test("getProvinceColor maps exact palette colors from reference map", () => {
+  assert.equal(core.getProvinceColor("Groningen"), "#53b35a");
+  assert.equal(core.getProvinceColor("Fryslân"), "#f7bc17");
+  assert.equal(core.getProvinceColor("Friesland"), "#f7bc17");
+  assert.equal(core.getProvinceColor("Drenthe"), "#a3ce65");
+  assert.equal(core.getProvinceColor("Overijssel"), "#917c71");
+  assert.equal(core.getProvinceColor("Flevoland"), "#256cb6");
+  assert.equal(core.getProvinceColor("Gelderland"), "#432670");
+  assert.equal(core.getProvinceColor("Utrecht"), "#f7bc17");
+  assert.equal(core.getProvinceColor("Noord-Holland"), "#1aa9a8");
+  assert.equal(core.getProvinceColor("North Holland"), "#1aa9a8");
+  assert.equal(core.getProvinceColor("Zuid-Holland"), "#eb565b");
+  assert.equal(core.getProvinceColor("South Holland"), "#eb565b");
+  assert.equal(core.getProvinceColor("Zeeland"), "#a3ce65");
+  assert.equal(core.getProvinceColor("Noord-Brabant"), "#aeacad");
+  assert.equal(core.getProvinceColor("North Brabant"), "#aeacad");
+  assert.equal(core.getProvinceColor("Limburg"), "#ef6328");
+});
+
+test("getProvinceColor gracefully handles edge cases and unknown provinces", () => {
+  assert.equal(core.getProvinceColor(null), "#38bdf8");
+  assert.equal(core.getProvinceColor(undefined), "#38bdf8");
+  assert.equal(core.getProvinceColor(""), "#38bdf8");
+  assert.equal(core.getProvinceColor(123), "#38bdf8");
+  assert.equal(core.getProvinceColor("UnknownProvince"), "#38bdf8");
+  assert.equal(core.getProvinceColor("  Utrecht  "), "#f7bc17");
+});
+

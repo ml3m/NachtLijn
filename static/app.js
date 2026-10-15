@@ -30,6 +30,18 @@
     markerZoomAnimation: true,
   });
 
+  if (typeof map.createPane === "function") {
+    if (!map.getPane("provincesPane")) {
+      const pPane = map.createPane("provincesPane");
+      pPane.style.zIndex = 350;
+    }
+    if (!map.getPane("provinceLabelsPane")) {
+      const lPane = map.createPane("provinceLabelsPane");
+      lPane.style.zIndex = 360;
+      lPane.style.pointerEvents = "none";
+    }
+  }
+
   document.body.classList.toggle("zoom-low", map.getZoom() <= 8);
 
   // Base layers
@@ -105,6 +117,7 @@
   const $feedback     = document.getElementById("search-feedback");
   const $searchDropdown = document.getElementById("search-dropdown");
   const $searchClear  = document.getElementById("search-clear-btn");
+  const $provincesCb  = document.getElementById("provinces-cb");
   const $borderCb     = document.getElementById("border-cb");
   const $trailsCb     = document.getElementById("trails-cb");
   const $stationCb    = document.getElementById("stations-cb");
@@ -179,6 +192,10 @@
   let fetchBackoff = 0;
   let connectionStatus = "offline";
   let openPopupId = null;
+  let provincesLayer = null;
+  let provinceLabelsLayer = null;
+  let provincesData = null;
+  let provincesVisible = true;
   let borderLayer = null;
   let borderGlowLayer = null;
   let borderVisible = true;
@@ -243,17 +260,30 @@
     } catch (_) {}
   }
 
-  // Force all 4 checkboxes to checked by default on site load
+  // Force all checkboxes to checked by default on site load
+  if ($provincesCb) $provincesCb.checked = true;
   if ($borderCb) $borderCb.checked = true;
   if ($trailsCb) $trailsCb.checked = true;
   if ($stationCb) $stationCb.checked = true;
   if ($disruptionsCb) $disruptionsCb.checked = true;
 
   function syncToggleLayers() {
+    provincesVisible = $provincesCb ? $provincesCb.checked : true;
     borderVisible = $borderCb ? $borderCb.checked : true;
     showTrails = $trailsCb ? $trailsCb.checked : true;
     stationsVisible = $stationCb ? $stationCb.checked : true;
     disruptionsVisible = $disruptionsCb ? $disruptionsCb.checked : true;
+
+    // 0. 12 Dutch Provinces Layer & Labels
+    if (provincesLayer) {
+      if (provincesVisible) {
+        if (!map.hasLayer(provincesLayer)) map.addLayer(provincesLayer);
+        if (provinceLabelsLayer && !map.hasLayer(provinceLabelsLayer)) map.addLayer(provinceLabelsLayer);
+      } else {
+        if (map.hasLayer(provincesLayer)) map.removeLayer(provincesLayer);
+        if (provinceLabelsLayer && map.hasLayer(provinceLabelsLayer)) map.removeLayer(provinceLabelsLayer);
+      }
+    }
 
     // 1. National border outline & aura glow
     if (borderLayer && borderGlowLayer) {
@@ -1230,6 +1260,137 @@
     }
   }
 
+  // ── 12 Dutch Provinces Layer ─────────────────────────────────────
+  const PROVINCE_COLORS = {
+    "Groningen": "#53b35a",
+    "Fryslân": "#f7bc17",
+    "Friesland": "#f7bc17",
+    "Drenthe": "#a3ce65",
+    "Overijssel": "#917c71",
+    "Flevoland": "#256cb6",
+    "Gelderland": "#432670",
+    "Utrecht": "#f7bc17",
+    "Noord-Holland": "#1aa9a8",
+    "North Holland": "#1aa9a8",
+    "Zuid-Holland": "#eb565b",
+    "South Holland": "#eb565b",
+    "Zeeland": "#a3ce65",
+    "Noord-Brabant": "#aeacad",
+    "North Brabant": "#aeacad",
+    "Limburg": "#ef6328",
+  };
+
+  function getProvinceColor(name) {
+    if (!name || typeof name !== "string") return "#38bdf8";
+    return PROVINCE_COLORS[name] || PROVINCE_COLORS[name.trim()] || "#38bdf8";
+  }
+
+  async function loadProvinces() {
+    try {
+      const r = await fetch("/api/provinces");
+      if (!r.ok) return;
+      provincesData = await r.json();
+
+      if (provincesLayer && map.hasLayer(provincesLayer)) map.removeLayer(provincesLayer);
+      if (provinceLabelsLayer && map.hasLayer(provinceLabelsLayer)) map.removeLayer(provinceLabelsLayer);
+
+      provinceLabelsLayer = L.layerGroup();
+
+      const paneName = (map.getPane && map.getPane("provincesPane")) ? "provincesPane" : "overlayPane";
+      const labelPaneName = (map.getPane && map.getPane("provinceLabelsPane")) ? "provinceLabelsPane" : "markerPane";
+
+      provincesLayer = L.geoJSON(provincesData, {
+        pane: paneName,
+        style: (feature) => {
+          const p = (feature && feature.properties) || {};
+          const col = p.color || getProvinceColor(p.name);
+          return {
+            fillColor: col,
+            fillOpacity: 0.22,
+            color: col,
+            weight: 1.5,
+            opacity: 0.85,
+            lineJoin: "round",
+            lineCap: "round",
+          };
+        },
+        onEachFeature: (feature, layer) => {
+          const p = (feature && feature.properties) || {};
+          const col = p.color || getProvinceColor(p.name);
+
+          // Add centered label marker
+          if (p.label_point && Array.isArray(p.label_point) && p.label_point.length === 2) {
+            const labelIcon = L.divIcon({
+              className: "province-map-label",
+              html: `<span>${p.name}</span>`,
+              iconSize: [110, 24],
+              iconAnchor: [55, 12],
+            });
+            const lblMarker = L.marker([p.label_point[1], p.label_point[0]], {
+              icon: labelIcon,
+              pane: labelPaneName,
+              interactive: false,
+            });
+            provinceLabelsLayer.addLayer(lblMarker);
+          }
+
+          // Glassmorphic rich tooltip
+          if (layer.bindTooltip) {
+            layer.bindTooltip(`
+              <div class="province-tooltip">
+                <div class="province-tooltip-header">
+                  <span class="province-dot" style="background:${col};"></span>
+                  <span class="province-name">${p.name}</span>
+                  <span class="province-badge">${p.iso_code || p.code || "NL"}</span>
+                </div>
+                <div class="province-tooltip-body">
+                  <div class="province-row"><span>Engels:</span> <strong>${p.name_en || p.name}</strong></div>
+                  <div class="province-row"><span>Hoofdstad:</span> <strong>${p.capital || "—"}</strong></div>
+                </div>
+              </div>
+            `, {
+              sticky: true,
+              direction: "auto",
+              className: "province-leaflet-tooltip",
+            });
+          }
+
+          // Interactive hover glow & bounds click
+          if (layer.on) {
+            layer.on({
+              mouseover: (e) => {
+                const l = e.target;
+                if (l && l.setStyle) {
+                  l.setStyle({
+                    fillOpacity: 0.44,
+                    weight: 2.8,
+                    color: "#ffffff",
+                    opacity: 1.0,
+                  });
+                }
+                if (typeof L !== "undefined" && L.Browser && !L.Browser.ie && !L.Browser.opera && !L.Browser.edge) {
+                  if (l && l.bringToFront) l.bringToFront();
+                }
+              },
+              mouseout: (e) => {
+                if (provincesLayer && provincesLayer.resetStyle) {
+                  provincesLayer.resetStyle(e.target);
+                }
+              },
+              click: (e) => {
+                if (e.target && typeof e.target.getBounds === "function") {
+                  map.fitBounds(e.target.getBounds(), { padding: [50, 50], maxZoom: 11, duration: 1.0 });
+                }
+              },
+            });
+          }
+        },
+      });
+
+      syncToggleLayers();
+    } catch (_) {}
+  }
+
   // ── Netherlands National Border Outline ──────────────────────────
   async function loadBorder() {
     try {
@@ -2116,6 +2277,7 @@
     });
   }
 
+  if ($provincesCb) $provincesCb.addEventListener("change", syncToggleLayers);
   $trailsCb.addEventListener("change", syncToggleLayers);
   if ($borderCb) $borderCb.addEventListener("change", syncToggleLayers);
 
@@ -2845,6 +3007,7 @@
   }
 
   // ── Boot ─────────────────────────────────────────────────────────
+  loadProvinces();
   loadBorder();
   loadDisruptions();
   loadTracks().then(() => {
@@ -2898,6 +3061,8 @@
       MAX_TRAIL_POINTS,
       COLORS,
       COLOR_OTHER,
+      PROVINCE_COLORS,
+      getProvinceColor,
     };
   }
 

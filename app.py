@@ -32,12 +32,14 @@ DATA_DIR.mkdir(exist_ok=True)
 TRACKS_FILE = DATA_DIR / "tracks.geojson"
 STATIONS_FILE = DATA_DIR / "stations.json"
 BORDER_FILE = DATA_DIR / "netherlands_border.geojson"
+PROVINCES_FILE = DATA_DIR / "provinces.geojson"
 POLL_INTERVAL = 5  # seconds (safe 12 req/min, well under 60 req/min limit)
 
 # ── Shared state ─────────────────────────────────────────────────
 tracks_cache: dict | None = None
 stations_cache: list | None = None
 border_cache: dict | None = None
+provinces_cache: dict | None = None
 
 # Preload disk caches immediately so API endpoints never return 503 on first load
 try:
@@ -47,6 +49,8 @@ try:
         stations_cache = json.loads(STATIONS_FILE.read_text(encoding="utf-8"))
     if BORDER_FILE.exists():
         border_cache = json.loads(BORDER_FILE.read_text(encoding="utf-8"))
+    if PROVINCES_FILE.exists():
+        provinces_cache = json.loads(PROVINCES_FILE.read_text(encoding="utf-8"))
 except Exception:
     pass
 trains_state: dict = {
@@ -751,6 +755,27 @@ async def api_border():
     if border_cache is None:
         return JSONResponse({"error": "border data not found"}, status_code=404)
     return JSONResponse(border_cache)
+
+
+def _load_provinces():
+    global provinces_cache
+    if PROVINCES_FILE.exists():
+        try:
+            provinces_cache = json.loads(PROVINCES_FILE.read_text(encoding="utf-8"))
+            return provinces_cache
+        except Exception:
+            pass
+    return None
+
+
+@app.get("/api/provinces")
+async def api_provinces():
+    global provinces_cache
+    if provinces_cache is None:
+        _load_provinces()
+    if provinces_cache is None:
+        return JSONResponse({"error": "provinces data not found"}, status_code=404)
+    return JSONResponse(provinces_cache)
 
 
 @app.get("/api/disruptions")

@@ -409,3 +409,76 @@ async def test_stream_disconnect_cleans_up_listeners():
         pass
 
     assert len(app._listeners) == initial_listener_count
+
+
+# ── Tests for api_provinces ──────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_api_provinces_returns_12_provinces_with_exact_schema():
+    """Verify that /api/provinces returns all 12 Dutch provinces with colors and metadata."""
+    app.provinces_cache = None  # Ensure fresh load from disk
+    response = await app.api_provinces()
+    assert response.status_code == 200
+
+    payload = json.loads(response.body.decode("utf-8"))
+    assert payload.get("type") == "FeatureCollection"
+    features = payload.get("features", [])
+    assert len(features) == 12
+
+    expected_provinces = {
+        "Groningen", "Fryslân", "Drenthe", "Overijssel", "Flevoland",
+        "Gelderland", "Utrecht", "Noord-Holland", "Zuid-Holland",
+        "Zeeland", "Noord-Brabant", "Limburg"
+    }
+
+    found_names = set()
+    for feat in features:
+        props = feat.get("properties", {})
+        name = props.get("name")
+        found_names.add(name)
+
+        assert props.get("name_en") is not None
+        assert props.get("code") is not None
+        assert props.get("iso_code", "").startswith("NL-")
+        assert props.get("color", "").startswith("#") and len(props["color"]) == 7
+        assert props.get("capital") is not None
+
+        label_pt = props.get("label_point")
+        assert isinstance(label_pt, list) and len(label_pt) == 2
+        # Check within Netherlands coordinates
+        assert 3.0 <= label_pt[0] <= 7.5
+        assert 50.5 <= label_pt[1] <= 53.8
+
+        geom = feat.get("geometry", {})
+        assert geom.get("type") in ("Polygon", "MultiPolygon")
+        assert len(geom.get("coordinates", [])) > 0
+
+    assert found_names == expected_provinces
+
+
+@pytest.mark.asyncio
+async def test_api_provinces_file_missing_returns_404(monkeypatch, tmp_path):
+    """Verify error handling when provinces.geojson is missing."""
+    app.provinces_cache = None
+    missing_file = tmp_path / "non_existent_provinces.geojson"
+    monkeypatch.setattr(app, "PROVINCES_FILE", missing_file)
+
+    response = await app.api_provinces()
+    assert response.status_code == 404
+    data = json.loads(response.body.decode("utf-8"))
+    assert "error" in data
+
+
+@pytest.mark.asyncio
+async def test_api_provinces_corrupted_file_handles_gracefully(monkeypatch, tmp_path):
+    """Verify error handling when provinces.geojson contains corrupted JSON."""
+    app.provinces_cache = None
+    corrupt_file = tmp_path / "corrupt_provinces.geojson"
+    corrupt_file.write_text("{{corrupted json invalid", encoding="utf-8")
+    monkeypatch.setattr(app, "PROVINCES_FILE", corrupt_file)
+
+    response = await app.api_provinces()
+    assert response.status_code == 404
+    data = json.loads(response.body.decode("utf-8"))
+    assert "error" in data
+

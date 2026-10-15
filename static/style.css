@@ -1873,3 +1873,91 @@ body.zoom-low .route-station-marker:hover .route-station-pill {
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
 }
+
+/* ── 12 Provinces Layer Styling & Labels ───────────────────────── */
+.province-map-label {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  pointer-events: none !important;
+  user-select: none !important;
+  white-space: nowrap !important;
+}
+.province-map-label span {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.85);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 8px rgba(0, 0, 0, 0.95);
+  background: rgba(8, 16, 32, 0.58);
+  padding: 2.5px 8px;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(6px);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+body.zoom-high .province-map-label span {
+  opacity: 0.35;
+  transform: scale(0.9);
+}
+
+.province-leaflet-tooltip {
+  background: rgba(6, 16, 36, 0.94) !important;
+  backdrop-filter: blur(16px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+  border-radius: 10px !important;
+  color: var(--ns-white) !important;
+  box-shadow: 0 8px 24px rgba(0, 8, 24, 0.75) !important;
+  padding: 8px 12px !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+}
+.province-leaflet-tooltip::before {
+  border-top-color: rgba(6, 16, 36, 0.94) !important;
+}
+.province-tooltip-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 5px;
+}
+.province-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  box-shadow: 0 0 6px currentColor;
+  flex-shrink: 0;
+}
+.province-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffffff;
+}
+.province-badge {
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--ns-yellow);
+  background: rgba(255, 201, 23, 0.15);
+  border: 1px solid rgba(255, 201, 23, 0.35);
+  padding: 1px 5px;
+  border-radius: 4px;
+  margin-left: auto;
+}
+.province-tooltip-body {
+  font-size: 11px;
+  color: #9ab0cc;
+  display: flex;
+  flex-direction: column;
+  gap: 2.5px;
+}
+.province-row {
+  display: flex;
+  gap: 6px;
+  justify-content: space-between;
+}
+.province-row strong {
+  color: #ffffff;
+}
+
