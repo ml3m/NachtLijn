@@ -140,6 +140,55 @@
   if ($stationCb) $stationCb.checked = true;
   if ($disruptionsCb) $disruptionsCb.checked = true;
 
+  function syncToggleLayers() {
+    borderVisible = $borderCb ? $borderCb.checked : true;
+    showTrails = $trailsCb ? $trailsCb.checked : true;
+    stationsVisible = $stationCb ? $stationCb.checked : true;
+    disruptionsVisible = $disruptionsCb ? $disruptionsCb.checked : true;
+
+    // 1. National border outline & aura glow
+    if (borderLayer && borderGlowLayer) {
+      if (borderVisible) {
+        if (!map.hasLayer(borderGlowLayer)) map.addLayer(borderGlowLayer);
+        if (!map.hasLayer(borderLayer)) map.addLayer(borderLayer);
+      } else {
+        if (map.hasLayer(borderGlowLayer)) map.removeLayer(borderGlowLayer);
+        if (map.hasLayer(borderLayer)) map.removeLayer(borderLayer);
+      }
+    }
+
+    // 2. Motion trails for live trains
+    for (const id in markers) {
+      const m = markers[id];
+      if (m && m.polyline) {
+        const cat = trainCategory(m.type);
+        if (showTrails && visibleTypes[cat]) {
+          if (!map.hasLayer(m.polyline)) map.addLayer(m.polyline);
+        } else {
+          if (map.hasLayer(m.polyline)) map.removeLayer(m.polyline);
+        }
+      }
+    }
+
+    // 3. Stations & live departure boards
+    if (stationsVisible && map.getZoom() >= 7) {
+      showStations();
+    } else {
+      hideStations();
+    }
+
+    // 4. Rail disruptions
+    if (disruptionsLayer) {
+      if (disruptionsVisible) {
+        if (!map.hasLayer(disruptionsLayer)) disruptionsLayer.addTo(map);
+      } else {
+        map.removeLayer(disruptionsLayer);
+      }
+    } else if (disruptionsVisible && disruptionsData && disruptionsData.disruptions) {
+      renderDisruptions(disruptionsData.disruptions);
+    }
+  }
+
   // ── Helpers ──────────────────────────────────────────────────────
   function headingToCompass(deg) {
     const directions = ["N", "NNO", "NO", "ONO", "O", "OZO", "ZO", "ZZO", "Z", "ZZW", "ZW", "WZW", "W", "WNW", "NW", "NNW"];
@@ -266,6 +315,12 @@
 
   // Opens popup and loads journey details asynchronously
   async function openTrainPopup(trainId) {
+    // If journey drawer is already open, sync it with the selected train
+    if (!$drawer.classList.contains("drawer-closed")) {
+      window.openJourney(trainId);
+      return;
+    }
+
     openPopupId = trainId;
     activeSelectedTrainId = trainId;
     const m = markers[trainId];
@@ -656,10 +711,7 @@
         interactive: false
       });
 
-      if (borderVisible) {
-        borderGlowLayer.addTo(map);
-        borderLayer.addTo(map);
-      }
+      syncToggleLayers();
     } catch (_) {}
   }
 
@@ -738,9 +790,7 @@
       const r = await fetch("/api/stations");
       if (!r.ok) return;
       stationsData = await r.json();
-      if (stationsVisible && map.getZoom() >= 7) {
-        showStations();
-      }
+      syncToggleLayers();
     } catch (_) {}
   }
 
@@ -873,11 +923,7 @@
     }
   };
 
-  $stationCb.addEventListener("change", () => {
-    stationsVisible = $stationCb.checked;
-    if (stationsVisible && map.getZoom() >= 7) showStations();
-    else hideStations();
-  });
+  $stationCb.addEventListener("change", syncToggleLayers);
 
   map.on("zoomend", () => {
     if (stationsVisible && map.getZoom() >= 7) showStations();
@@ -895,6 +941,7 @@
       if (disruptionsVisible) {
         renderDisruptions(list);
       }
+      syncToggleLayers();
     } catch (_) {
       $disruptionsLbl.textContent = `🚨 Rail disruptions (offline)`;
     }
@@ -971,18 +1018,7 @@
     }
   }
 
-  $disruptionsCb.addEventListener("change", () => {
-    disruptionsVisible = $disruptionsCb.checked;
-    if (disruptionsLayer) {
-      if (disruptionsVisible) {
-        if (!map.hasLayer(disruptionsLayer)) disruptionsLayer.addTo(map);
-      } else {
-        map.removeLayer(disruptionsLayer);
-      }
-    } else if (disruptionsVisible && disruptionsData) {
-      renderDisruptions(disruptionsData.disruptions || []);
-    }
-  });
+  $disruptionsCb.addEventListener("change", syncToggleLayers);
 
   // ── Journey Timeline Drawer ──────────────────────────────────────
   window.openJourney = async function (trainId) {
@@ -1073,9 +1109,22 @@
 
       // Timeline stops (only stopping stations, skipping all non-stopping '--' stations)
       let stopsHtml = bannerHtml;
-      data.stops.forEach((s) => {
+      const nextIdx = data.stops.findIndex(s => s.state === "next");
+
+      data.stops.forEach((s, idx) => {
         const isNext = s.state === "next";
-        const itemClass = isNext ? "timeline-item next-stop" : (s.state === "passed" ? "timeline-item passed" : "timeline-item upcoming");
+        const isPrevToNext = (nextIdx !== -1 && idx === nextIdx - 1);
+        let itemClass = "timeline-item upcoming";
+        let nodeContent = "";
+
+        if (isNext) {
+          itemClass = "timeline-item next-stop";
+          nodeContent = '<div class="node-pulse-halo"></div>';
+        } else if (s.state === "passed") {
+          itemClass = isPrevToNext ? "timeline-item passed prev-to-next" : "timeline-item passed";
+          nodeContent = '<span class="node-passed-check">✓</span>';
+        }
+
         let nextBadge = "";
         if (isNext) {
           if (s.at_destination) {
@@ -1098,7 +1147,7 @@
 
         stopsHtml += `
           <div class="${itemClass}" ${isNext ? 'id="timeline-active-next"' : ""}>
-            <div class="timeline-node"></div>
+            <div class="timeline-node">${nodeContent}</div>
             <div class="timeline-station">
               <span>${s.name} ${nextBadge}</span>
               ${trackStr}
@@ -1169,32 +1218,8 @@
     }
   }
 
-  $trailsCb.addEventListener("change", () => {
-    showTrails = $trailsCb.checked;
-    for (const id in markers) {
-      const m = markers[id];
-      if (!showTrails && m.polyline && map.hasLayer(m.polyline)) {
-        map.removeLayer(m.polyline);
-      } else if (showTrails && m.polyline && visibleTypes[trainCategory(m.type)] && !map.hasLayer(m.polyline)) {
-        map.addLayer(m.polyline);
-      }
-    }
-  });
-
-  if ($borderCb) {
-    $borderCb.addEventListener("change", () => {
-      borderVisible = $borderCb.checked;
-      if (borderLayer && borderGlowLayer) {
-        if (borderVisible) {
-          if (!map.hasLayer(borderGlowLayer)) map.addLayer(borderGlowLayer);
-          if (!map.hasLayer(borderLayer)) map.addLayer(borderLayer);
-        } else {
-          if (map.hasLayer(borderGlowLayer)) map.removeLayer(borderGlowLayer);
-          if (map.hasLayer(borderLayer)) map.removeLayer(borderLayer);
-        }
-      }
-    });
-  }
+  $trailsCb.addEventListener("change", syncToggleLayers);
+  if ($borderCb) $borderCb.addEventListener("change", syncToggleLayers);
 
   // ── Fetch Trains (Fallback Poller) ──────────────────────────────
   async function fetchTrains() {
@@ -1545,8 +1570,10 @@
     if (disruptionsData && disruptionsData.disruptions) {
       renderDisruptions(disruptionsData.disruptions);
     }
+    syncToggleLayers();
   });
   loadStations();
+  syncToggleLayers();
   connectSSE();
   requestAnimationFrame(animate);
   requestAnimationFrame(updateCountdown);

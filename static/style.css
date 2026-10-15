@@ -478,10 +478,11 @@ html, body, #map { width: 100%; height: 100%; overflow: hidden; font-family: 'Se
   font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px;
   color: var(--ns-yellow); margin-bottom: 12px;
 }
-.timeline-list { position: relative; padding-left: 20px; }
+.timeline-list { position: relative; padding-left: 28px; }
 .timeline-list::before {
-  content: ''; position: absolute; left: 6px; top: 8px; bottom: 8px; width: 2px;
-  background: rgba(0, 48, 130, 0.7);
+  content: ''; position: absolute; left: 13px; top: 12px; bottom: 20px; width: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  border-left: 2px dashed rgba(255, 255, 255, 0.2);
 }
 .timeline-empty { color: #8fa8cc; font-size: 12px; font-style: italic; }
 
@@ -507,17 +508,48 @@ html, body, #map { width: 100%; height: 100%; overflow: hidden; font-family: 'Se
   position: relative; margin-bottom: 14px; font-size: 12px;
   transition: all 0.2s ease;
 }
+.timeline-item::after {
+  content: '';
+  position: absolute;
+  left: -16px;
+  top: 15px;
+  bottom: -15px;
+  width: 3px;
+  background: transparent;
+  z-index: 1;
+}
+.timeline-item:last-child::after {
+  display: none;
+}
+/* Passed rail segment */
+.timeline-item.passed::after {
+  background: #3b82f6;
+  box-shadow: 0 0 6px rgba(59, 130, 246, 0.6);
+}
+/* Active transition track from previous stop to next stop */
+.timeline-item.passed.prev-to-next::after {
+  background: linear-gradient(to bottom, #3b82f6 0%, var(--ns-yellow) 100%);
+  box-shadow: 0 0 10px rgba(255, 201, 23, 0.7);
+}
+
 .timeline-node {
-  position: absolute; left: -20px; top: 3px; width: 14px; height: 14px; border-radius: 50%;
-  background: #0a0e17; border: 2.5px solid #4a9eff; z-index: 2;
+  position: absolute; left: -22px; top: 2px; width: 15px; height: 15px; border-radius: 50%;
+  background: #001438; border: 2px solid #60a5fa; z-index: 2;
+  display: flex; align-items: center; justify-content: center;
+}
+.node-passed-check {
+  font-size: 9px;
+  font-weight: 800;
+  color: #93c5fd;
+  line-height: 1;
 }
 
 /* Passed Stations */
 .timeline-item.passed {
-  opacity: 0.42;
+  opacity: 0.55;
 }
 .timeline-item.passed .timeline-node {
-  background: #334460; border-color: #5577aa;
+  background: #1e3a8a; border-color: #3b82f6;
 }
 .timeline-item.passed .timeline-station {
   color: #8fa8cc;
@@ -526,23 +558,28 @@ html, body, #map { width: 100%; height: 100%; overflow: hidden; font-family: 'Se
 /* Next Upcoming Station (Active Highlight) */
 .timeline-item.next-stop {
   opacity: 1;
-  background: rgba(255, 201, 23, 0.1);
-  border: 1px solid rgba(255, 201, 23, 0.5);
+  background: linear-gradient(90deg, rgba(255, 201, 23, 0.16) 0%, rgba(0, 48, 130, 0.25) 100%);
+  border: 1px solid rgba(255, 201, 23, 0.6);
   border-radius: 8px;
   padding: 8px 10px 8px 12px;
-  margin-left: -12px;
+  margin-left: -8px;
   margin-bottom: 16px;
-  box-shadow: 0 0 16px rgba(255, 201, 23, 0.2);
+  box-shadow: 0 0 16px rgba(255, 201, 23, 0.25);
 }
 .timeline-item.next-stop .timeline-node {
   background: var(--ns-yellow); border-color: #ffffff;
-  box-shadow: 0 0 10px var(--ns-yellow), 0 0 18px rgba(255, 201, 23, 0.8);
+  border-width: 2.5px;
+  box-shadow: 0 0 12px var(--ns-yellow), 0 0 20px rgba(255, 201, 23, 0.9);
   animation: pulse-yellow 1.8s infinite ease-in-out;
-  left: -20px; top: 10px; width: 16px; height: 16px;
+  left: -22px; top: 9px; width: 17px; height: 17px;
+}
+.node-pulse-halo {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--ns-blue);
 }
 @keyframes pulse-yellow {
   0% { transform: scale(1); box-shadow: 0 0 8px var(--ns-yellow); }
-  50% { transform: scale(1.3); box-shadow: 0 0 18px var(--ns-yellow); }
+  50% { transform: scale(1.25); box-shadow: 0 0 18px var(--ns-yellow); }
   100% { transform: scale(1); box-shadow: 0 0 8px var(--ns-yellow); }
 }
 .timeline-item.next-stop .timeline-station {
