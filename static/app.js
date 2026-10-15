@@ -1644,6 +1644,8 @@
       updateFollowButtons();
       window.openJourney(tid);
     }
+
+    updateSpeedLeaderboard();
   }
 
   // ── Animation Loop (Track-Snapped Along-Track Extrapolation) ──────
@@ -1745,6 +1747,70 @@
       $cdText.textContent = "LIVE";
     }
     requestAnimationFrame(updateCountdown);
+  }
+
+  // ── Fleet Speed Leaderboard ─────────────────────────────────────
+  let isLeaderboardCollapsed = false;
+
+  function updateSpeedLeaderboard() {
+    const $list = document.getElementById("leaderboard-list");
+    if (!$list || isLeaderboardCollapsed) return;
+
+    const moving = [];
+    for (const id in markers) {
+      const m = markers[id];
+      if (m && m.speed > 5) {
+        moving.push(m);
+      }
+    }
+
+    moving.sort((a, b) => b.speed - a.speed);
+    const topTrains = moving.slice(0, 4);
+
+    if (topTrains.length === 0) {
+      $list.innerHTML = `<div style="color:#8fa8cc;font-size:10.5px;padding:6px;text-align:center;">Geen treinen met actieve snelheid</div>`;
+      return;
+    }
+
+    let html = "";
+    topTrains.forEach((t) => {
+      const cat = trainCategory(t.type);
+      const isHigh = t.speed >= 100;
+      const speedClass = isHigh ? "leaderboard-speed high-speed" : "leaderboard-speed";
+      const j = journeyCache[t.id];
+      const dest = j && j.destination ? `➔ ${j.destination}` : "";
+
+      html += `
+        <div class="leaderboard-item" onclick="window.focusTrainFromDeparture('${t.id}')" title="Volg trein ${t.id} (${t.speed.toFixed(0)} km/h)">
+          <div class="leaderboard-train-info">
+            <span class="leaderboard-badge ${cat}">${cat}</span>
+            <span style="font-weight:700;">${t.id}</span>
+            <span style="color:#8fa8cc;font-size:10px;overflow:hidden;text-overflow:ellipsis;">${dest}</span>
+          </div>
+          <span class="${speedClass}">⚡ ${t.speed.toFixed(0)} km/h</span>
+        </div>
+      `;
+    });
+
+    $list.innerHTML = html;
+  }
+
+  const $leaderboardToggle = document.getElementById("leaderboard-toggle");
+  const $leaderboardList = document.getElementById("leaderboard-list");
+  const $leaderboardChevron = document.getElementById("leaderboard-chevron");
+
+  if ($leaderboardToggle && $leaderboardList) {
+    $leaderboardToggle.addEventListener("click", () => {
+      isLeaderboardCollapsed = !isLeaderboardCollapsed;
+      if (isLeaderboardCollapsed) {
+        $leaderboardList.classList.add("collapsed");
+        if ($leaderboardChevron) $leaderboardChevron.style.transform = "rotate(180deg)";
+      } else {
+        $leaderboardList.classList.remove("collapsed");
+        if ($leaderboardChevron) $leaderboardChevron.style.transform = "rotate(0deg)";
+        updateSpeedLeaderboard();
+      }
+    });
   }
 
   // ── Universal Train & Station Search with Real-Time Autocomplete ──
@@ -1986,14 +2052,16 @@
   loadStations();
   syncToggleLayers();
   updateNachtnetStatus();
+  updateSpeedLeaderboard();
   checkUrlParams();
   window.addEventListener("popstate", checkUrlParams);
   connectSSE();
   requestAnimationFrame(animate);
   requestAnimationFrame(updateCountdown);
 
-  // Periodic disruption check and night timetable check every 60s
+  // Periodic checks
   setInterval(loadDisruptions, 60000);
   setInterval(updateNachtnetStatus, 60000);
+  setInterval(updateSpeedLeaderboard, 3000);
 
 })();
