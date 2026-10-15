@@ -1348,3 +1348,59 @@ html, body, #map { width: 100%; height: 100%; overflow: hidden; font-family: 'Se
     font-size: 20px;
   }
 }
+
+/* ── Rail Weather & Wind Corridor Layer ─────────────────────────── */
+.weather-corridor-marker {
+  background: transparent !important;
+  border: none !important;
+}
+.weather-corridor-badge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(0, 20, 56, 0.88);
+  border: 1px solid rgba(74, 158, 255, 0.45);
+  border-radius: 20px;
+  padding: 3px 8px;
+  color: #e0e6f0;
+  font-size: 11px;
+  font-weight: 700;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6), 0 0 10px rgba(0, 48, 130, 0.4);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transform: translate(-50%, -50%);
+}
+.weather-corridor-badge:hover {
+  background: rgba(0, 48, 130, 0.95);
+  border-color: #FFC917;
+  transform: translate(-50%, -50%) scale(1.08);
+}
+.weather-corridor-badge.medium {
+  border-color: #ffa726;
+  box-shadow: 0 0 10px rgba(255, 167, 38, 0.4);
+}
+.weather-corridor-badge.high {
+  border-color: #ff3344;
+  box-shadow: 0 0 14px rgba(255, 51, 68, 0.6);
+  animation: pulse-weather-alert 1.8s infinite;
+}
+@keyframes pulse-weather-alert {
+  0% { box-shadow: 0 0 4px #ff3344; }
+  50% { box-shadow: 0 0 16px #ff3344; }
+  100% { box-shadow: 0 0 4px #ff3344; }
+}
+.weather-temp {
+  color: #ffffff;
+  font-weight: 800;
+}
+.weather-wind {
+  color: #8fa8cc;
+  font-size: 10px;
+}
+.weather-wind.gusts {
+  color: #ffca28;
+  font-weight: 800;
+}

@@ -625,6 +625,112 @@ async def api_disruptions():
     return JSONResponse(disruptions_state)
 
 
+# ── Rail Weather & Wind Corridor Monitoring ────────────────────────
+weather_cache: dict | None = None
+weather_cache_time: float = 0.0
+
+WEATHER_CORRIDORS = [
+    {"id": "ut", "name": "Utrecht Knooppunt", "corridor": "Centraal Netwerk", "lat": 52.09, "lng": 5.12},
+    {"id": "ams", "name": "Schiphol & Amsterdam", "corridor": "Kust & Schiphollijn", "lat": 52.37, "lng": 4.90},
+    {"id": "hsl", "name": "HSL-Zuid & Moerdijkbrug", "corridor": "Hogesnelheidslijn", "lat": 51.70, "lng": 4.63},
+    {"id": "zee", "name": "Zeeland & Westerschelde", "corridor": "Kust & Vlissingenlijn", "lat": 51.50, "lng": 3.61},
+    {"id": "arn", "name": "Arnhem & Betuweroute", "corridor": "Oost Corridor & ICE", "lat": 51.98, "lng": 5.91},
+    {"id": "ein", "name": "Eindhoven & Brabant", "corridor": "Zuidelijke As", "lat": 51.44, "lng": 5.48},
+    {"id": "zwo", "name": "Zwolle & Noord-Nederland", "corridor": "Noordelijke Spoorlijnen", "lat": 53.00, "lng": 6.55},
+]
+
+
+def _wmo_to_condition(code: int) -> tuple[str, str]:
+    if code == 0:
+        return "Helder", "☀️"
+    elif code in (1, 2):
+        return "Licht bewolkt", "⛅"
+    elif code == 3:
+        return "Bewolkt", "☁️"
+    elif code in (45, 48):
+        return "Mist / Nevel", "🌫️"
+    elif code in (51, 53, 55, 61, 63, 65, 80, 81, 82):
+        return "Regen", "🌧️"
+    elif code in (71, 73, 75, 77, 85, 86):
+        return "Sneeuwval", "❄️"
+    elif code in (95, 96, 99):
+        return "Onweer & Bliksem", "⛈️"
+    return "Wisselvallig", "🌤️"
+
+
+@app.get("/api/weather")
+async def api_weather():
+    global weather_cache, weather_cache_time
+    now = time.time()
+    if weather_cache and (now - weather_cache_time) < 600:
+        return JSONResponse(weather_cache)
+
+    try:
+        lats = ",".join(str(c["lat"]) for c in WEATHER_CORRIDORS)
+        lngs = ",".join(str(c["lng"]) for c in WEATHER_CORRIDORS)
+        url = (
+            f"https://api.open-meteo.com/v1/forecast"
+            f"?latitude={lats}&longitude={lngs}"
+            f"&current=temperature_2m,wind_speed_10m,wind_gusts_10m,weather_code"
+        )
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.get(url)
+            if r.status_code == 200:
+                raw = r.json()
+                if not isinstance(raw, list):
+                    raw = [raw]
+                corridors = []
+                for i, meta in enumerate(WEATHER_CORRIDORS):
+                    curr = raw[i].get("current", {}) if i < len(raw) else {}
+                    t = float(curr.get("temperature_2m", 10.0))
+                    ws = float(curr.get("wind_speed_10m", 15.0))
+                    wg = float(curr.get("wind_gusts_10m", ws * 1.3))
+                    code = int(curr.get("weather_code", 1))
+                    cond_name, cond_icon = _wmo_to_condition(code)
+
+                    if wg >= 75:
+                        impact = "⚠️ Stormwindstoten: snelheidsbeperking mogelijk op viaducten & HSL"
+                        risk = "high"
+                    elif wg >= 55:
+                        impact = "🌬️ Krachtige wind: verhoogde waakzaamheid bovenleiding"
+                        risk = "medium"
+                    elif t <= 0:
+                        impact = "❄️ Vorst & Rijp: risico op wisselstoringen en rijdraadijsafzetting"
+                        risk = "medium"
+                    else:
+                        impact = "🟢 Gunstige spoor- & weercondities"
+                        risk = "low"
+
+                    corridors.append({
+                        "id": meta["id"],
+                        "name": meta["name"],
+                        "corridor": meta["corridor"],
+                        "lat": meta["lat"],
+                        "lng": meta["lng"],
+                        "temp_c": round(t, 1),
+                        "wind_kmh": round(ws, 0),
+                        "wind_gusts_kmh": round(wg, 0),
+                        "condition": cond_name,
+                        "icon": cond_icon,
+                        "advisory": impact,
+                        "risk_level": risk
+                    })
+
+                weather_cache = {
+                    "timestamp": now,
+                    "count": len(corridors),
+                    "corridors": corridors
+                }
+                weather_cache_time = now
+                return JSONResponse(weather_cache)
+    except Exception:
+        pass
+
+    if weather_cache:
+        return JSONResponse(weather_cache)
+    return JSONResponse({"timestamp": now, "count": 0, "corridors": []})
+
+
 @app.get("/api/journey/{train_id}")
 async def api_journey(train_id: int, lat: float | None = None, lng: float | None = None):
     # Lookup live GPS position from active registry if not provided in query

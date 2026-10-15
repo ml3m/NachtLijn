@@ -92,6 +92,7 @@
   const $stationCb    = document.getElementById("stations-cb");
   const $disruptionsCb= document.getElementById("disruptions-cb");
   const $disruptionsLbl = document.getElementById("disruptions-label");
+  const $weatherCb    = document.getElementById("weather-cb");
   const $feedBadge    = document.getElementById("feed-badge");
 
   // Drawer elements
@@ -166,6 +167,9 @@
   let disruptionsLayer = null;
   let disruptionsData = null;
   let disruptionsVisible = true;
+  let weatherLayer = null;
+  let weatherData = null;
+  let weatherVisible = false;
   let showTrails = true;
   const stationMarkers = {};
   let pendingUrlTrainId = null;
@@ -269,6 +273,18 @@
       }
     } else if (disruptionsVisible && disruptionsData && disruptionsData.disruptions) {
       renderDisruptions(disruptionsData.disruptions);
+    }
+
+    // 5. Rail weather & wind corridors
+    weatherVisible = $weatherCb ? $weatherCb.checked : false;
+    if (weatherLayer) {
+      if (weatherVisible) {
+        if (!map.hasLayer(weatherLayer)) weatherLayer.addTo(map);
+      } else {
+        map.removeLayer(weatherLayer);
+      }
+    } else if (weatherVisible && weatherData && weatherData.corridors) {
+      renderWeather(weatherData.corridors);
     }
   }
 
@@ -1468,6 +1484,80 @@
     }
   };
 
+  // ── Rail Weather & Wind Corridor Monitoring ────────────────────────
+  async function loadWeather() {
+    try {
+      const r = await fetch("/api/weather");
+      if (!r.ok) return;
+      weatherData = await r.json();
+      if (weatherVisible && weatherData && weatherData.corridors) {
+        renderWeather(weatherData.corridors);
+      }
+    } catch (_) {}
+  }
+
+  function renderWeather(corridors) {
+    if (weatherLayer) {
+      map.removeLayer(weatherLayer);
+    }
+    weatherLayer = L.layerGroup();
+
+    for (const c of corridors) {
+      const isGusty = c.wind_gusts_kmh >= 55;
+      const badgeHtml = `
+        <div class="weather-corridor-badge ${c.risk_level}">
+          <span>${c.icon}</span>
+          <span class="weather-temp">${c.temp_c}°C</span>
+          <span class="weather-wind ${isGusty ? "gusts" : ""}">🌬️ ${c.wind_kmh} km/h</span>
+        </div>
+      `;
+      const icon = L.divIcon({
+        className: "weather-corridor-marker",
+        html: badgeHtml,
+        iconSize: [0, 0]
+      });
+
+      const marker = L.marker([c.lat, c.lng], { icon: icon, zIndexOffset: 90 });
+      const riskColor = c.risk_level === "high" ? "#ff3344" : (c.risk_level === "medium" ? "#ffa726" : "#00e676");
+      const popupHtml = `
+        <div style="font-size:12px;line-height:1.5;padding:4px;min-width:220px;">
+          <div style="font-weight:800;color:#FFC917;font-size:13.5px;margin-bottom:3px;">${c.icon} ${c.name}</div>
+          <div style="color:#8fa8cc;font-size:10.5px;margin-bottom:7px;">Spoorcorridor: <b>${c.corridor}</b></div>
+          <div style="display:flex;justify-content:space-between;margin-bottom:3px;">
+            <span style="color:#c5d5ea;">Conditie:</span> <b>${c.condition}</b>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-bottom:3px;">
+            <span style="color:#c5d5ea;">Temperatuur:</span> <b>${c.temp_c} °C</b>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-bottom:3px;">
+            <span style="color:#c5d5ea;">Windsnelheid:</span> <b>${c.wind_kmh} km/h</b>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-bottom:7px;">
+            <span style="color:#c5d5ea;">Piek windstoten:</span> <b style="color:${c.wind_gusts_kmh >= 60 ? "#ff3344" : "#ffca28"};">${c.wind_gusts_kmh} km/h</b>
+          </div>
+          <div style="font-size:11px;padding:6px;background:rgba(255,255,255,0.06);border-radius:4px;border-left:3px solid ${riskColor};">
+            ${c.advisory}
+          </div>
+        </div>
+      `;
+      marker.bindPopup(popupHtml, { maxWidth: 280 });
+      weatherLayer.addLayer(marker);
+    }
+
+    if (weatherVisible) {
+      weatherLayer.addTo(map);
+    }
+  }
+
+  if ($weatherCb) {
+    $weatherCb.addEventListener("change", () => {
+      syncToggleLayers();
+      if ($weatherCb.checked && (!weatherData || !weatherLayer)) {
+        loadWeather();
+      }
+    });
+  }
+
   // ── Rolling Stock Coach Composition Visualizer ──────────────────
   function buildCoachDiagramHtml(data) {
     const isIntercity = (data.category_name && data.category_name.toLowerCase().includes("intercity")) || (data.train_type && ["VIRM", "ICM", "ICNG", "TRAXX"].some(t => data.train_type.toUpperCase().includes(t)));
@@ -2437,6 +2527,7 @@
   updateNachtnetStatus();
   updateAudioButton();
   updateSpeedLeaderboard();
+  loadWeather();
   checkUrlParams();
   window.addEventListener("popstate", checkUrlParams);
   connectSSE();
@@ -2447,6 +2538,7 @@
   setInterval(loadDisruptions, 60000);
   setInterval(updateNachtnetStatus, 60000);
   setInterval(updateSpeedLeaderboard, 3000);
+  setInterval(loadWeather, 300000);
 
   // Register PWA Service Worker
   if ("serviceWorker" in navigator) {
