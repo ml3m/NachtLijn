@@ -955,23 +955,23 @@
 
     for (const d of list) {
       const popupContent = `
-        <div style="font-size:12.5px;line-height:1.5;max-width:270px;">
-          <div style="font-weight:700;color:#ff3344;margin-bottom:4px;">🚨 ${d.title}</div>
+        <div style="font-size:12.5px;line-height:1.5;max-width:280px;padding:4px;">
+          <div style="font-weight:800;color:#ff3344;margin-bottom:5px;font-size:13.5px;">🚨 ${d.title}</div>
           ${d.cause ? `<div><b>Oorzaak:</b> ${d.cause}</div>` : ""}
           ${d.delay ? `<div><b>Vertraging:</b> <span style="color:#ffcc00;font-weight:700;">${d.delay}</span></div>` : ""}
-          ${d.period ? `<div style="color:#8fa8cc;font-size:11px;margin-top:4px;">${d.period}</div>` : ""}
-          ${d.situation ? `<div style="font-size:11px;margin-top:4px;color:#e0e6f0;">${d.situation}</div>` : ""}
+          ${d.period ? `<div style="color:#8fa8cc;font-size:11px;margin-top:4px;">📅 ${d.period}</div>` : ""}
+          ${d.situation ? `<div style="font-size:11px;margin-top:6px;color:#e0e6f0;background:rgba(255,255,255,0.06);padding:6px;border-radius:4px;">${d.situation}</div>` : ""}
         </div>
       `;
 
       for (const sec of d.sections) {
-        // Render exact curved rail tracks between consecutive stations
+        // Collect continuous physical corridor rail coordinates
+        let corridorCoords = [];
         for (let i = 0; i < sec.length - 1; i++) {
           const s1 = (sec[i].code || "").toLowerCase();
           const s2 = (sec[i + 1].code || "").toLowerCase();
           const trackKey = `${s1}_${s2}`;
 
-          // Use curved physical rail if available, or fall back to direct station-to-station segment
           const coords = trackIndex[trackKey] || (
             (sec[i].lat && sec[i].lng && sec[i + 1].lat && sec[i + 1].lng)
               ? [[sec[i].lat, sec[i].lng], [sec[i + 1].lat, sec[i + 1].lng]]
@@ -979,18 +979,62 @@
           );
 
           if (coords) {
-            const poly = L.polyline(coords, {
-              color: "#ff1744",
-              weight: 4.5,
-              opacity: 0.9,
-              dashArray: "7, 9"
-            });
-            poly.bindPopup(popupContent);
-            disruptionsLayer.addLayer(poly);
+            if (corridorCoords.length > 0) {
+              corridorCoords.push(...coords.slice(1));
+            } else {
+              corridorCoords.push(...coords);
+            }
           }
         }
 
-        // Place alert markers at key corridor points (start, middle, end)
+        if (corridorCoords.length >= 2) {
+          // 1. Wide pulsing ambient danger aura
+          const glowPoly = L.polyline(corridorCoords, {
+            color: "#ff1744",
+            weight: 12,
+            opacity: 0.28,
+            lineCap: "round",
+            lineJoin: "round",
+            interactive: false
+          });
+          disruptionsLayer.addLayer(glowPoly);
+
+          // 2. High-visibility solid red rail track
+          const basePoly = L.polyline(corridorCoords, {
+            color: "#d50000",
+            weight: 5,
+            opacity: 0.95,
+            lineCap: "round",
+            lineJoin: "round",
+            interactive: true
+          });
+          basePoly.bindPopup(popupContent, { maxWidth: 320 });
+          basePoly.bindTooltip(`🚨 ${d.title}`, { sticky: true, className: "station-tooltip" });
+
+          basePoly.on("mouseover", () => {
+            glowPoly.setStyle({ weight: 18, opacity: 0.55 });
+            basePoly.setStyle({ weight: 7, color: "#ff1744" });
+          });
+          basePoly.on("mouseout", () => {
+            glowPoly.setStyle({ weight: 12, opacity: 0.28 });
+            basePoly.setStyle({ weight: 5, color: "#d50000" });
+          });
+
+          disruptionsLayer.addLayer(basePoly);
+
+          // 3. Dashed yellow hazard overlay stripe
+          const dashPoly = L.polyline(corridorCoords, {
+            color: "#ffca28",
+            weight: 2.5,
+            opacity: 0.9,
+            dashArray: "7, 9",
+            lineCap: "round",
+            interactive: false
+          });
+          disruptionsLayer.addLayer(dashPoly);
+        }
+
+        // Place alert markers strictly anchored to station coordinates
         const badgeIndices = [0];
         if (sec.length > 2) badgeIndices.push(Math.floor(sec.length / 2));
         if (sec.length > 1) badgeIndices.push(sec.length - 1);
@@ -1005,9 +1049,10 @@
               iconSize: [24, 24],
               iconAnchor: [12, 12]
             }),
-            zIndexOffset: 100
+            zIndexOffset: 120
           });
-          badge.bindPopup(popupContent);
+          badge.bindPopup(popupContent, { maxWidth: 320 });
+          badge.bindTooltip(`🚨 ${d.title}`, { direction: "top", offset: [0, -12], className: "station-tooltip" });
           disruptionsLayer.addLayer(badge);
         }
       }
