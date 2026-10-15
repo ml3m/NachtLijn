@@ -498,4 +498,53 @@ test("checkTrainDisruption detects upcoming route intersections and proximity", 
   core.setDisruptionsDataForTest(null);
 });
 
+// ── Tests for ProRail 3-Minute Punctuality Norm & formatDelayStatus ───
+
+test("DELAY_THRESHOLD_MIN adheres strictly to official ProRail 3-minute norm", () => {
+  assert.equal(core.DELAY_THRESHOLD_MIN, 3);
+});
+
+test("formatDelayStatus categorizes 0 min delay as on time", () => {
+  const res = core.formatDelayStatus(0, false);
+  assert.equal(res.cssClass, "ontime");
+  assert.equal(res.text, "Op tijd");
+  assert.equal(res.isDelayed, false);
+  assert.equal(res.isBuffer, false);
+});
+
+test("formatDelayStatus categorizes 1-2 min delay as on time within norm buffer", () => {
+  const res1 = core.formatDelayStatus(1, false);
+  assert.equal(res1.cssClass, "ontime buffer");
+  assert.equal(res1.text, "+1 min (binnen norm)");
+  assert.equal(res1.isDelayed, false);
+  assert.equal(res1.isBuffer, true);
+
+  const res2 = core.formatDelayStatus(2, false);
+  assert.equal(res2.cssClass, "ontime buffer");
+  assert.equal(res2.text, "+2 min (binnen norm)");
+  assert.equal(res2.isDelayed, false);
+  assert.equal(res2.isBuffer, true);
+});
+
+test("formatDelayStatus categorizes >= 3 min delay as delayed", () => {
+  const res3 = core.formatDelayStatus(3, false);
+  assert.equal(res3.cssClass, "delayed");
+  assert.equal(res3.text, "+3 min vertraging");
+  assert.equal(res3.isDelayed, true);
+  assert.equal(res3.isBuffer, false);
+
+  const res15 = core.formatDelayStatus(15, false);
+  assert.equal(res15.cssClass, "delayed");
+  assert.equal(res15.text, "+15 min vertraging");
+  assert.equal(res15.isDelayed, true);
+  assert.equal(res15.isBuffer, false);
+});
+
+test("formatDelayStatus handles cancelled journeys", () => {
+  const res = core.formatDelayStatus(10, true);
+  assert.equal(res.cssClass, "cancelled");
+  assert.equal(res.text, "🚫 Uitgevallen");
+  assert.equal(res.isDelayed, false);
+});
+
 

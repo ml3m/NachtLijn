@@ -226,6 +226,22 @@
     return diffMin > 0 ? diffMin : 0;
   }
 
+  const DELAY_THRESHOLD_MIN = 3; // Official ProRail/NS 3-minute punctuality standard (< 3 min is on-time)
+
+  function formatDelayStatus(delayMin, isCancelled) {
+    if (isCancelled) {
+      return { cssClass: "cancelled", text: "🚫 Uitgevallen", isDelayed: false, isBuffer: false };
+    }
+    const d = Number(delayMin) || 0;
+    if (d >= DELAY_THRESHOLD_MIN) {
+      return { cssClass: "delayed", text: `+${d} min vertraging`, isDelayed: true, isBuffer: false };
+    }
+    if (d > 0) {
+      return { cssClass: "ontime buffer", text: `+${d} min (binnen norm)`, isDelayed: false, isBuffer: true };
+    }
+    return { cssClass: "ontime", text: "Op tijd", isDelayed: false, isBuffer: false };
+  }
+
   // Real-time disruption zone intersection check against train route and position
   function checkTrainDisruption(journey, currentPos) {
     if (!disruptionsData || !disruptionsData.disruptions || disruptionsData.disruptions.length === 0) {
@@ -544,12 +560,9 @@
     let routeHtml = "";
     if (journey) {
       const isCancelled = Boolean(journey.cancelled || (journey.next_stop && journey.next_stop.cancelled));
-      let delayClass = journey.current_delay > 0 ? "delayed" : "ontime";
-      let delayText = journey.current_delay > 0 ? `+${journey.current_delay} min vertraging` : "Op tijd";
-      if (isCancelled) {
-        delayClass = "cancelled";
-        delayText = "🚫 Uitgevallen";
-      }
+      const status = formatDelayStatus(journey.current_delay, isCancelled);
+      const delayClass = status.cssClass;
+      const delayText = status.text;
 
       const isAtDest = journey.next_stop && journey.next_stop.at_destination;
       // High-speed trains (>15 km/h) are running in transit, not dwelling at station
@@ -582,8 +595,9 @@
       `;
     } else {
       const delayMin = (t && t.delay !== undefined) ? t.delay : ((markers[t.id] && markers[t.id].delay) || 0);
-      const delayClass = delayMin > 0 ? "delayed" : "ontime";
-      const delayText = delayMin > 0 ? `+${delayMin} min vertraging` : "Op tijd";
+      const status = formatDelayStatus(delayMin, false);
+      const delayClass = status.cssClass;
+      const delayText = status.text;
       routeHtml = `
         <div class="popup-route-container" id="route-box-${t.id}">
           <div class="popup-status-delay" style="margin-bottom:4px;">
@@ -878,7 +892,10 @@
 
       const timeStr = s.time ? s.time : "";
       const trackStr = s.track ? `Sp. ${s.track}` : "";
-      const delayBadge = s.delay_minutes > 0 ? `<span class="pill-delay">+${s.delay_minutes}m</span>` : "";
+      const sDelay = s.delay_minutes || 0;
+      const delayBadge = sDelay >= DELAY_THRESHOLD_MIN
+        ? `<span class="pill-delay delayed">+${sDelay}m</span>`
+        : (sDelay > 0 ? `<span class="pill-delay buffer">+${sDelay}m</span>` : "");
 
       const icon = L.divIcon({
         className: `route-station-marker ${stateClass}`,
@@ -903,7 +920,9 @@
         zIndexOffset: isNext ? 1800 : (isDest || isOrigin ? 1600 : (isPast ? 1200 : 1400)),
       });
 
-      const delayInfo = s.delay_minutes > 0 ? ` (+${s.delay_minutes} min vertraging)` : "";
+      const delayInfo = sDelay >= DELAY_THRESHOLD_MIN
+        ? ` (+${sDelay} min vertraging)`
+        : (sDelay > 0 ? ` (+${sDelay} min binnen norm)` : "");
       const statusDesc = isPast ? "Reeds gepasseerd ✓" : (isNext ? "Volgende halte 🚉" : (isDest ? "Eindbestemming 🏁" : (isOrigin ? "Beginstation 🛫" : "Geplande stop")));
       stopMarker.bindTooltip(`
         <div style="font-family:'Segoe UI',sans-serif;font-size:12px;line-height:1.4;padding:2px 4px;">
@@ -1064,12 +1083,13 @@
 
             // Dynamic mid-track delay estimation
             const dynDelay = estimateMidTrackDelay(distM, m.speed, ns.planned_arrival || ns.planned_departure || ns.time_iso);
-            if (dynDelay > (ns.delay_minutes || 0) && dynDelay >= 2) {
-              $cockpitDistance.textContent = `📍 nog ${distStr} (+${dynDelay}m geschat)`;
-              $cockpitDistance.style.color = "#FFC917";
-            } else if (ns.delay_minutes > 0) {
-              $cockpitDistance.textContent = `📍 nog ${distStr} (+${ns.delay_minutes}m)`;
-              $cockpitDistance.style.color = "#ff9100";
+            const activeDelay = Math.max(dynDelay, ns.delay_minutes || 0);
+            if (activeDelay >= DELAY_THRESHOLD_MIN) {
+              $cockpitDistance.textContent = `📍 nog ${distStr} (+${activeDelay}m vertraging)`;
+              $cockpitDistance.style.color = "#ff4455";
+            } else if (activeDelay > 0) {
+              $cockpitDistance.textContent = `📍 nog ${distStr} (+${activeDelay}m binnen norm)`;
+              $cockpitDistance.style.color = "#ffca28";
             } else {
               $cockpitDistance.textContent = `📍 nog ${distStr} (op tijd)`;
               $cockpitDistance.style.color = "#00e676";
@@ -2287,7 +2307,13 @@
           bannerTag = "🚉 Halteert momenteel te / At Station";
           timeLabel = "Vertrek";
         }
-        const delayText = data.next_stop.delay_minutes > 0 ? `<span class="ns-delay">+${data.next_stop.delay_minutes} min</span>` : "<span style='color:#00e676;'>Op tijd</span>";
+        const stopDelay = data.next_stop.delay_minutes || 0;
+        let delayText = "<span style='color:#00e676;'>Op tijd</span>";
+        if (stopDelay >= DELAY_THRESHOLD_MIN) {
+          delayText = `<span class="ns-delay delayed">+${stopDelay} min</span>`;
+        } else if (stopDelay > 0) {
+          delayText = `<span class="ns-delay buffer">+${stopDelay} min (binnen norm)</span>`;
+        }
         let trackText = "";
         if (data.next_stop.track) {
           if (data.next_stop.track_changed) {
@@ -2352,7 +2378,12 @@
             nextBadge = `<span class="next-pill">VOLGENDE HALTE</span>`;
           }
         }
-        const delayStr = s.delay_minutes > 0 ? `<span class="timeline-delay">+${s.delay_minutes} min</span>` : "";
+        let delayStr = "";
+        if (s.delay_minutes >= DELAY_THRESHOLD_MIN) {
+          delayStr = `<span class="timeline-delay delayed">+${s.delay_minutes} min</span>`;
+        } else if (s.delay_minutes > 0) {
+          delayStr = `<span class="timeline-delay buffer">+${s.delay_minutes} min (binnen norm)</span>`;
+        }
         let trackStr = "";
         if (s.track) {
           if (s.track_changed) {
@@ -2431,7 +2462,8 @@
       totalCount++;
       const cat = trainCategory(m.type);
       const j = journeyCache[m.id];
-      const isDelayed = (j && j.current_delay && j.current_delay > 0) || (m.delay && m.delay > 0);
+      const curDelay = (j && j.current_delay !== undefined) ? j.current_delay : (m.delay || 0);
+      const isDelayed = curDelay >= DELAY_THRESHOLD_MIN;
       if (isDelayed) delayedCount++;
 
       let isVisible = visibleTypes[cat];
@@ -3286,6 +3318,8 @@
       setCachedJourney,
       estimateMidTrackDelay,
       checkTrainDisruption,
+      DELAY_THRESHOLD_MIN,
+      formatDelayStatus,
       setDisruptionsDataForTest: (data) => { disruptionsData = data; },
     };
   }

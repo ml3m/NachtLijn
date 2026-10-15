@@ -77,6 +77,8 @@ try:
 except Exception:
     pass
 
+PUNCTUALITY_DELAY_THRESHOLD_MINUTES = 3  # Official ProRail/NS 3-minute punctuality standard (< 3 min is on-time)
+
 trains_state: dict = {
     "timestamp": 0,
     "next_update_at": 0,
@@ -330,7 +332,7 @@ async def _poll_trains(client: httpx.AsyncClient):
         ic_count = sum(1 for t in parsed if t["type"] in ("IC", "ICE"))
         spr_count = sum(1 for t in parsed if t["type"] == "SPR")
         other_count = len(parsed) - ic_count - spr_count
-        delayed_count = sum(1 for t in parsed if t.get("delay", 0) > 0)
+        delayed_count = sum(1 for t in parsed if t.get("delay", 0) >= PUNCTUALITY_DELAY_THRESHOLD_MINUTES)
         pct = round(((len(parsed) - delayed_count) / len(parsed)) * 100) if parsed else 100
 
         trains_state = {
@@ -672,7 +674,7 @@ def _parse_ndov_xml(raw_xml: str, now: float | None = None) -> bool:
         ic_c = sum(1 for t in t_list if t["type"] in ("IC", "ICE"))
         spr_c = sum(1 for t in t_list if t["type"] == "SPR")
         oth_c = len(t_list) - ic_c - spr_c
-        delayed_c = sum(1 for t in t_list if t.get("delay", 0) > 0)
+        delayed_c = sum(1 for t in t_list if t.get("delay", 0) >= PUNCTUALITY_DELAY_THRESHOLD_MINUTES)
         pct = round(((len(t_list) - delayed_c) / len(t_list)) * 100) if t_list else 100
         trains_state = {
             "timestamp": now,
@@ -715,7 +717,7 @@ async def _ndov_zeromq_consumer():
                         changed = _parse_dvs_xml(raw_xml, now)
                         if changed and trains_registry:
                             t_list = list(trains_registry.values())
-                            delayed_c = sum(1 for t in t_list if t.get("delay", 0) > 0)
+                            delayed_c = sum(1 for t in t_list if t.get("delay", 0) >= PUNCTUALITY_DELAY_THRESHOLD_MINUTES)
                             pct = round(((len(t_list) - delayed_c) / len(t_list)) * 100) if t_list else 100
                             trains_state["delayed_count"] = delayed_c
                             trains_state["punctuality_pct"] = pct
@@ -723,7 +725,7 @@ async def _ndov_zeromq_consumer():
                         changed = _parse_das_xml(raw_xml, now)
                         if changed and trains_registry:
                             t_list = list(trains_registry.values())
-                            delayed_c = sum(1 for t in t_list if t.get("delay", 0) > 0)
+                            delayed_c = sum(1 for t in t_list if t.get("delay", 0) >= PUNCTUALITY_DELAY_THRESHOLD_MINUTES)
                             pct = round(((len(t_list) - delayed_c) / len(t_list)) * 100) if t_list else 100
                             trains_state["delayed_count"] = delayed_c
                             trains_state["punctuality_pct"] = pct
@@ -855,7 +857,7 @@ async def _poll_hub_departures(client: httpx.AsyncClient):
 
     if trains_registry:
         t_list = list(trains_registry.values())
-        delayed_c = sum(1 for t in t_list if t.get("delay", 0) > 0)
+        delayed_c = sum(1 for t in t_list if t.get("delay", 0) >= PUNCTUALITY_DELAY_THRESHOLD_MINUTES)
         pct = round(((len(t_list) - delayed_c) / len(t_list)) * 100) if t_list else 100
         trains_state["delayed_count"] = delayed_c
         trains_state["punctuality_pct"] = pct
@@ -976,7 +978,7 @@ async def api_delays():
     now = time.time()
     t_list = list(trains_registry.values())
     delays_map = {str(t["id"]): t.get("delay", 0) for t in t_list}
-    delayed_c = sum(1 for d in delays_map.values() if d > 0)
+    delayed_c = sum(1 for d in delays_map.values() if d >= PUNCTUALITY_DELAY_THRESHOLD_MINUTES)
     total_c = len(delays_map)
     pct = round(((total_c - delayed_c) / total_c) * 100) if total_c else 100
     return JSONResponse({

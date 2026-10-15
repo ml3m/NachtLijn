@@ -543,3 +543,32 @@ async def test_api_delays_bulk_fleet_payload():
     assert data["delays"]["201"] == 4
     assert data["delays"]["202"] == 7
 
+
+@pytest.mark.asyncio
+async def test_punctuality_adheres_to_prorail_3_minute_norm():
+    """Verify that delays of 1 or 2 minutes are within tolerance (< 3 min) and count as on time."""
+    assert app.PUNCTUALITY_DELAY_THRESHOLD_MINUTES == 3
+
+    app.trains_registry.clear()
+    app.train_delays.clear()
+
+    # 3 trains: 0 min (on time), 1 min (buffer), 2 min (buffer)
+    app.trains_registry[301] = {"id": 301, "lat": 52.0, "lng": 5.0, "type": "IC", "delay": 0}
+    app.trains_registry[302] = {"id": 302, "lat": 52.1, "lng": 5.1, "type": "SPR", "delay": 1}
+    app.trains_registry[303] = {"id": 303, "lat": 52.2, "lng": 5.2, "type": "IC", "delay": 2}
+
+    response = await app.api_delays()
+    data = json.loads(response.body.decode("utf-8"))
+    assert data["total_trains"] == 3
+    assert data["delayed_count"] == 0
+    assert data["punctuality_pct"] == 100
+
+    # Add 4th train with exactly 3 minutes delay -> now delayed!
+    app.trains_registry[304] = {"id": 304, "lat": 52.3, "lng": 5.3, "type": "SPR", "delay": 3}
+    response2 = await app.api_delays()
+    data2 = json.loads(response2.body.decode("utf-8"))
+    assert data2["total_trains"] == 4
+    assert data2["delayed_count"] == 1
+    assert data2["punctuality_pct"] == 75
+
+
