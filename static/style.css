@@ -608,12 +608,14 @@ html, body, #map { width: 100%; height: 100%; overflow: hidden; font-family: 'Se
 
 /* ── Station Dots & NS Departure Board Popup ───────────────────── */
 .station-dot {
-  width: 8px !important; height: 8px !important;
-  margin-left: -4px !important; margin-top: -4px !important;
+  width: 7px !important; height: 7px !important;
+  margin-left: -3.5px !important; margin-top: -3.5px !important;
   background: var(--ns-white); border-radius: 50%;
-  border: 2px solid var(--ns-blue);
-  box-shadow: 0 0 6px rgba(255, 255, 255, 0.9), 0 0 10px rgba(0, 48, 130, 0.6);
-  cursor: pointer !important; transition: transform 0.15s ease-out;
+  border: 1.5px solid var(--ns-blue);
+  box-shadow: 0 0 5px rgba(255, 255, 255, 0.8), 0 0 8px rgba(0, 48, 130, 0.5);
+  cursor: pointer !important;
+  transition: none !important;
+  transform-origin: center center;
 }
 .station-dot.hub {
   width: 11px !important; height: 11px !important;
@@ -625,6 +627,8 @@ html, body, #map { width: 100%; height: 100%; overflow: hidden; font-family: 'Se
   background: var(--ns-yellow);
   box-shadow: 0 0 0 5px rgba(255, 201, 23, 0.45), 0 0 14px var(--ns-yellow);
   z-index: 999;
+  transform: scale(1.35);
+  transition: transform 0.1s ease;
 }
 
 .station-tooltip {
@@ -1370,13 +1374,14 @@ html, body, #map { width: 100%; height: 100%; overflow: hidden; font-family: 'Se
   -webkit-backdrop-filter: blur(10px);
   cursor: pointer;
   white-space: nowrap;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   transform: translate(-50%, -50%);
+  transition: background 0.15s ease, border-color 0.15s ease !important;
 }
 .weather-corridor-badge:hover {
   background: rgba(0, 48, 130, 0.95);
   border-color: #FFC917;
   transform: translate(-50%, -50%) scale(1.08);
+  transition: transform 0.12s ease !important;
 }
 .weather-corridor-badge.medium {
   border-color: #ffa726;
@@ -1424,4 +1429,24 @@ html, body, #map { width: 100%; height: 100%; overflow: hidden; font-family: 'Se
   padding: 4px 8px !important;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6) !important;
   backdrop-filter: blur(8px);
+}
+
+/* ── High-Performance Smooth Zooming & Crisp Markers ────────────── */
+.leaflet-zoom-anim .leaflet-zoom-animated {
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  will-change: transform;
+}
+.leaflet-tile-pane,
+.leaflet-overlay-pane,
+.leaflet-marker-pane,
+.leaflet-tile-container {
+  will-change: transform;
+}
+.train-icon,
+.station-dot,
+.weather-corridor-marker,
+.disruption-marker-wrap {
+  transform-origin: center center !important;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
 }

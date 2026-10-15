@@ -18,7 +18,16 @@
     center: [52.1326, 5.2913],
     zoom: 8,
     preferCanvas: true,
+    renderer: L.canvas({ padding: 0.5, tolerance: 4 }),
     zoomControl: true,
+    zoomSnap: 1,
+    zoomDelta: 1,
+    wheelPxPerZoomLevel: 120, // Prevents runaway multi-level jump on single wheel flick
+    wheelDebounceTime: 40,   // Aggregates rapid wheel bursts into single clean transition
+    zoomAnimation: true,
+    zoomAnimationThreshold: 4,
+    fadeAnimation: true,
+    markerZoomAnimation: true,
   });
 
   // Base layers
@@ -1146,15 +1155,9 @@
         }
       }
 
-      // Halo layer (wide subtle glow)
-      L.geoJSON(geo, {
-        style: { color: "#4a9eff", weight: 5, opacity: 0.08 },
-        interactive: false,
-      }).addTo(map);
-
-      // Core rail layer
+      // High-performance single-pass rail network layer
       tracksLayer = L.geoJSON(geo, {
-        style: { color: "#4a9eff", weight: 1.5, opacity: 0.45 },
+        style: { color: "#38bdf8", weight: 1.6, opacity: 0.48 },
         interactive: false,
       }).addTo(map);
 
@@ -1177,54 +1180,64 @@
 
   function showStations() {
     if (!stationsData) return;
-    if (stationsLayer) {
-      if (!map.hasLayer(stationsLayer)) stationsLayer.addTo(map);
-      return;
-    }
-    stationsLayer = L.layerGroup();
+    const currentZoom = map.getZoom();
 
-    for (const s of stationsData) {
-      if (s.country && s.country !== "NL") continue;
+    if (!stationsLayer) {
+      stationsLayer = L.layerGroup();
+      for (const s of stationsData) {
+        if (s.country && s.country !== "NL") continue;
 
-      const isHub = s.type === "KNOOPPUNT_INTERCITY_STATION" || s.type === "INTERCITY_STATION";
-      const dotClass = isHub ? "station-dot hub" : "station-dot";
-      const iconSize = isHub ? [12, 12] : [8, 8];
+        const isHub = s.type === "KNOOPPUNT_INTERCITY_STATION" || s.type === "INTERCITY_STATION";
+        const dotClass = isHub ? "station-dot hub" : "station-dot";
+        const iconSize = isHub ? [12, 12] : [8, 8];
 
-      const m = L.marker([s.lat, s.lng], {
-        icon: L.divIcon({ className: dotClass, iconSize: iconSize }),
-        zIndexOffset: isHub ? 50 : 0
-      });
+        const m = L.marker([s.lat, s.lng], {
+          icon: L.divIcon({ className: dotClass, iconSize: iconSize }),
+          zIndexOffset: isHub ? 50 : 0
+        });
 
-      // Tooltip on hover
-      m.bindTooltip(`<b>${s.name}</b>`, {
-        direction: "top",
-        offset: [0, -8],
-        className: "station-tooltip"
-      });
+        // Tooltip on hover
+        m.bindTooltip(`<b>${s.name}</b>`, {
+          direction: "top",
+          offset: [0, -8],
+          className: "station-tooltip"
+        });
 
-      // Popup on click (loading departure board)
-      m.bindPopup(`<div style="padding:10px;font-size:12px;color:#c0cadb;">Vertrektijden laden voor <b>${s.name}</b>…</div>`, {
-        maxWidth: 360,
-        className: "ns-departure-popup"
-      });
+        // Popup on click (loading departure board)
+        m.bindPopup(`<div style="padding:10px;font-size:12px;color:#c0cadb;">Vertrektijden laden voor <b>${s.name}</b>…</div>`, {
+          maxWidth: 360,
+          className: "ns-departure-popup"
+        });
 
-      m.on("click", (e) => {
-        L.DomEvent.stopPropagation(e);
-        fetchStationDepartures(s, m);
-      });
+        m.on("click", (e) => {
+          L.DomEvent.stopPropagation(e);
+          fetchStationDepartures(s, m);
+        });
 
-      m.on("popupclose", () => {
-        updateUrlParam("station", null);
-      });
+        m.on("popupclose", () => {
+          updateUrlParam("station", null);
+        });
 
-      if (s.code) {
-        stationMarkers[s.code.toUpperCase()] = { marker: m, station: s };
+        if (s.code) {
+          stationMarkers[s.code.toUpperCase()] = { marker: m, station: s, isHub: isHub };
+        }
       }
-
-      stationsLayer.addLayer(m);
     }
 
-    stationsLayer.addTo(map);
+    // Zoom-dependent station density:
+    // At low zoom (<= 8: national overview), show only Intercity Hubs (~40 stations) to keep zooming lightning-fast
+    // At zoom >= 9 (regional/city), show all stations (~400 stations)
+    stationsLayer.clearLayers();
+    for (const code in stationMarkers) {
+      const entry = stationMarkers[code];
+      if (currentZoom >= 9 || entry.isHub) {
+        stationsLayer.addLayer(entry.marker);
+      }
+    }
+
+    if (!map.hasLayer(stationsLayer)) {
+      stationsLayer.addTo(map);
+    }
 
     if (pendingUrlStationCode && stationMarkers[pendingUrlStationCode]) {
       const code = pendingUrlStationCode;
@@ -2211,6 +2224,13 @@
   // ── Animation Loop (Track-Snapped Along-Track Extrapolation) ──────
   function animate() {
     const now = performance.now();
+
+    // Skip DOM marker & canvas layout recalculations during active zoom transition
+    // to give 100% of GPU & compositor budget to silky-smooth 60fps zooming
+    if (map._animatingZoom) {
+      requestAnimationFrame(animate);
+      return;
+    }
 
     for (const id in markers) {
       const m = markers[id];
