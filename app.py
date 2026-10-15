@@ -708,6 +708,15 @@ async def api_journey(train_id: int, lat: float | None = None, lng: float | None
         if train_parts and train_parts[0].get("image"):
             image_url = train_parts[0]["image"].get("uri")
 
+        composition = []
+        for p in train_parts:
+            composition.append({
+                "identifier": p.get("stockIdentifier", ""),
+                "type": p.get("stockType", stock_info.get("trainType", "")),
+                "facilities": p.get("facilities", []),
+                "image": p.get("image", {}).get("uri") if p.get("image") else None,
+            })
+
         result = {
             "train_id": train_id,
             "origin": origin,
@@ -720,6 +729,7 @@ async def api_journey(train_id: int, lat: float | None = None, lng: float | None
             "seats": stock_info.get("numberOfSeats", 0),
             "parts": stock_info.get("numberOfParts", 0),
             "image_url": image_url,
+            "composition": composition,
             "stops": parsed_stops,
         }
         journey_cache[train_id] = (now, result)

@@ -1020,6 +1020,81 @@
 
   $disruptionsCb.addEventListener("change", syncToggleLayers);
 
+  // ── Rolling Stock Coach Composition Visualizer ──────────────────
+  function buildCoachDiagramHtml(data) {
+    const isIntercity = (data.category_name && data.category_name.toLowerCase().includes("intercity")) || (data.train_type && ["VIRM", "ICM", "ICNG", "TRAXX"].some(t => data.train_type.toUpperCase().includes(t)));
+    const trainModel = data.train_type || (isIntercity ? "VIRM-4 Dubbeldekker" : "SNG-4 Sprinter");
+    const numCars = (data.composition && data.composition.length > 0) ? data.composition.length : (data.parts || 4);
+
+    let coaches = [];
+    if (data.composition && data.composition.length > 0) {
+      coaches = data.composition.map((c, i) => {
+        const isFront = (i === 0);
+        const isRear = (i === data.composition.length - 1);
+        const has1st = (i === 0);
+        return {
+          cab: isFront ? "front-cab" : isRear ? "rear-cab" : "mid-car",
+          classNum: has1st ? "1" : "2",
+          isFirstClass: has1st,
+          facilities: c.facilities && c.facilities.length > 0 ? c.facilities : (has1st ? ["📶"] : (i === 1 ? ["🚲"] : (i === 2 ? ["♿", "🚻"] : ["📶"]))),
+          label: c.identifier || `Rijtuig ${i + 1}`
+        };
+      });
+    } else {
+      for (let i = 0; i < Math.max(numCars, 3); i++) {
+        const isFront = (i === 0);
+        const isRear = (i === numCars - 1);
+        const has1st = (i === 0);
+        let facs = ["📶"];
+        if (i === 1) facs = ["🚲", "📶"];
+        if (i === 2) facs = ["♿", "🚻", "📶"];
+        coaches.push({
+          cab: isFront ? "front-cab" : isRear ? "rear-cab" : "mid-car",
+          classNum: has1st ? "1" : "2",
+          isFirstClass: has1st,
+          facilities: facs,
+          label: `Rijtuig ${i + 1}`
+        });
+      }
+    }
+
+    let coachesHtml = "";
+    coaches.forEach((c) => {
+      const classBadgeClass = c.isFirstClass ? "coach-class-num c1" : "coach-class-num c2";
+      const facIcons = c.facilities.join(" ");
+      coachesHtml += `
+        <div class="train-coach ${c.cab}" title="${c.label}: ${c.isFirstClass ? '1e & 2e klas' : '2e klas'} • Faciliteiten: ${c.facilities.join(', ')}">
+          <span class="${classBadgeClass}">${c.classNum}</span>
+          <div class="coach-icons">${facIcons}</div>
+        </div>
+      `;
+    });
+
+    const seatsStr = data.seats ? `${data.seats} zitplaatsen` : "Reguliere capaciteit";
+    return `
+      <div class="stock-meta-row">
+        ${data.image_url ? `<img src="${data.image_url}" class="stock-img" alt="${trainModel}"/>` : ""}
+        <div class="stock-details">
+          <span class="stock-title">🚆 ${trainModel} (${coaches.length}-delig)</span>
+          <span class="stock-seats">${seatsStr} • ${data.operator || "NS"}</span>
+        </div>
+      </div>
+      <div class="stock-train-diagram">
+        <div class="train-composition-track">
+          ${coachesHtml}
+        </div>
+        <div class="train-legend">
+          <span><b class="class-badge c1">1</b> 1e klas</span>
+          <span><b class="class-badge c2">2</b> 2e klas</span>
+          <span>♿ Rolstoel</span>
+          <span>🚲 Fiets</span>
+          <span>🚻 WC</span>
+          <span>📶 WiFi</span>
+        </div>
+      </div>
+    `;
+  }
+
   // ── Journey Timeline Drawer ──────────────────────────────────────
   window.openJourney = async function (trainId) {
     activeSelectedTrainId = trainId;
@@ -1059,17 +1134,9 @@
       $drawerTitle.textContent = `${categoryLabel(data.train_type || "Trein")} ${trainId}`;
       $drawerSub.textContent = `${data.origin || ""} ➔ ${data.destination || ""}`;
 
-      // Rolling stock info
-      if (data.train_type || data.image_url) {
-        $drawerStock.style.display = "flex";
-        $drawerStock.innerHTML = `
-          ${data.image_url ? `<img src="${data.image_url}" class="stock-img" alt="Stock"/>` : ""}
-          <div class="stock-details">
-            <span class="stock-title">${data.train_type || "Treinstel"} (${data.parts || 1}-delig)</span>
-            <span class="stock-seats">${data.seats ? data.seats + " zitplaatsen" : "Reizigerstrein"}</span>
-          </div>
-        `;
-      }
+      // Rolling stock coach composition visualizer
+      $drawerStock.style.display = "flex";
+      $drawerStock.innerHTML = buildCoachDiagramHtml(data);
 
       // Next station highlight banner
       let bannerHtml = "";
@@ -1563,6 +1630,32 @@
     }
   });
 
+  // ── Nachtnet Status Indicator ──────────────────────────────────
+  function updateNachtnetStatus() {
+    const $pill = document.getElementById("nachtnet-pill");
+    if (!$pill) return;
+    try {
+      const d = new Date();
+      const nlTimeStr = d.toLocaleTimeString("en-GB", { timeZone: "Europe/Amsterdam", hour12: false });
+      const parts = nlTimeStr.split(":");
+      const nlHour = parseInt(parts[0], 10);
+      const nlMin = parseInt(parts[1], 10);
+      const totalMinutes = nlHour * 60 + nlMin;
+
+      // Dutch Nachtnet operates between 01:00 (60) and 05:30 (330)
+      const isNachtnet = (totalMinutes >= 60 && totalMinutes <= 330);
+      if (isNachtnet) {
+        $pill.className = "nachtnet-pill active";
+        $pill.innerHTML = "🌙 Nachtnet";
+        $pill.title = "Nachtnet dienstregeling actief (01:00 - 05:30) • Uurlijkse nachttreinen Randstad & Brabant corridor";
+      } else {
+        $pill.className = "nachtnet-pill daylight";
+        $pill.innerHTML = "☀️ Dagdienst";
+        $pill.title = "Reguliere NS dienstregeling actief";
+      }
+    } catch (_) {}
+  }
+
   // ── Boot ─────────────────────────────────────────────────────────
   loadBorder();
   loadDisruptions();
@@ -1574,11 +1667,13 @@
   });
   loadStations();
   syncToggleLayers();
+  updateNachtnetStatus();
   connectSSE();
   requestAnimationFrame(animate);
   requestAnimationFrame(updateCountdown);
 
-  // Periodic disruption check every 60s
+  // Periodic disruption check and night timetable check every 60s
   setInterval(loadDisruptions, 60000);
+  setInterval(updateNachtnetStatus, 60000);
 
 })();
