@@ -1404,3 +1404,24 @@ html, body, #map { width: 100%; height: 100%; overflow: hidden; font-family: 'Se
   color: #ffca28;
   font-weight: 800;
 }
+
+/* ── Active Train Route Waypoint Markers & Tooltip ──────────────── */
+.pulse-stop-marker {
+  animation: pulse-stop-glow 1.8s infinite cubic-bezier(0.4, 0, 0.6, 1);
+}
+@keyframes pulse-stop-glow {
+  0% { transform: scale(1); filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.6)); }
+  50% { transform: scale(1.22); filter: drop-shadow(0 0 8px currentColor); }
+  100% { transform: scale(1); filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.6)); }
+}
+.route-stop-tooltip {
+  background: rgba(0, 20, 56, 0.94) !important;
+  border: 1px solid rgba(74, 158, 255, 0.45) !important;
+  color: #ffffff !important;
+  font-size: 11.5px !important;
+  font-weight: 600 !important;
+  border-radius: 6px !important;
+  padding: 4px 8px !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6) !important;
+  backdrop-filter: blur(8px);
+}

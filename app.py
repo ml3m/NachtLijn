@@ -130,6 +130,57 @@ async def _ensure_tracks(client: httpx.AsyncClient) -> dict | None:
     return None
 
 
+_track_index_cache: dict[str, list[list[float]]] | None = None
+
+
+def _get_track_index() -> dict[str, list[list[float]]]:
+    global _track_index_cache
+    if _track_index_cache is not None:
+        return _track_index_cache
+    _track_index_cache = {}
+    if TRACKS_FILE.exists():
+        try:
+            geo = json.loads(TRACKS_FILE.read_text(encoding="utf-8"))
+            for feat in geo.get("features", []):
+                props = feat.get("properties", {})
+                f = (props.get("from") or "").lower()
+                t = (props.get("to") or "").lower()
+                geom = feat.get("geometry", {})
+                coords = geom.get("coordinates", [])
+                if f and t and coords:
+                    latlngs = [[c[1], c[0]] for c in coords]
+                    _track_index_cache[f"{f}_{t}"] = latlngs
+                    _track_index_cache[f"{t}_{f}"] = list(reversed(latlngs))
+        except Exception:
+            pass
+    return _track_index_cache
+
+
+def _build_route_geometry(route_stations: list[dict]) -> list[list[float]]:
+    track_idx = _get_track_index()
+    geometry: list[list[float]] = []
+    for i in range(len(route_stations) - 1):
+        s1 = route_stations[i]
+        s2 = route_stations[i + 1]
+        c1_code = s1.get("code", "")
+        c2_code = s2.get("code", "")
+        key = f"{c1_code}_{c2_code}"
+        seg_coords = track_idx.get(key)
+        if seg_coords:
+            if geometry:
+                geometry.extend(seg_coords[1:])
+            else:
+                geometry.extend(seg_coords)
+        else:
+            p1 = [s1["lat"], s1["lng"]] if s1.get("lat") and s1.get("lng") else None
+            p2 = [s2["lat"], s2["lng"]] if s2.get("lat") and s2.get("lng") else None
+            if p1 and p2:
+                if not geometry:
+                    geometry.append(p1)
+                geometry.append(p2)
+    return geometry
+
+
 async def _ensure_stations(client: httpx.AsyncClient) -> list | None:
     global stations_cache
     if STATIONS_FILE.exists():
@@ -808,6 +859,23 @@ async def api_journey(train_id: int, lat: float | None = None, lng: float | None
         operator_name = ""
         category_name = ""
 
+        route_stations = []
+        for s in raw_stops:
+            st_info = s.get("stop", {})
+            code = (s.get("id", "").split("_")[0] or st_info.get("stationCode", "")).lower()
+            lat_val = st_info.get("lat")
+            lng_val = st_info.get("lng")
+            if code:
+                route_stations.append({
+                    "code": code,
+                    "name": st_info.get("name", ""),
+                    "lat": float(lat_val) if lat_val is not None else None,
+                    "lng": float(lng_val) if lng_val is not None else None,
+                    "status": s.get("status", ""),
+                })
+
+        route_geometry = _build_route_geometry(route_stations)
+
         for s in raw_stops:
             st_info = s.get("stop", {})
             arr = s.get("arrivals", [{}])[0] if s.get("arrivals") else {}
@@ -832,9 +900,11 @@ async def api_journey(train_id: int, lat: float | None = None, lng: float | None
             track_changed = bool(actual_track and planned_track and actual_track != planned_track)
             track = actual_track or planned_track or ""
             t_iso = actual_dep or planned_dep or actual_arr or planned_arr or ""
+            st_code = (s.get("id", "").split("_")[0] or st_info.get("stationCode", "")).lower()
 
             parsed_stops.append({
                 "id": s.get("id"),
+                "code": st_code,
                 "name": st_info.get("name", ""),
                 "lat": st_info.get("lat"),
                 "lng": st_info.get("lng"),
@@ -890,6 +960,8 @@ async def api_journey(train_id: int, lat: float | None = None, lng: float | None
             "image_url": image_url,
             "composition": composition,
             "stops": parsed_stops,
+            "route_stations": route_stations,
+            "route_geometry": route_geometry,
         }
         journey_cache[train_id] = (now, result)
         return JSONResponse(result)

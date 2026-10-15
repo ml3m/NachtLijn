@@ -486,6 +486,31 @@
   }
 
   // ── Active Route Tracing & Train Following ──────────────────────
+  let activeRouteData = null; // { trainId, journey, fullRoute, lastUpdatePos }
+
+  function buildTrackGeometryFromStations(stList) {
+    if (!stList || stList.length < 2) return [];
+    const geom = [];
+    for (let i = 0; i < stList.length - 1; i++) {
+      const s1 = (stList[i].code || "").toLowerCase();
+      const s2 = (stList[i + 1].code || "").toLowerCase();
+      const trackKey = `${s1}_${s2}`;
+      const seg = trackIndex[trackKey];
+      if (seg && seg.length > 0) {
+        if (geom.length > 0) geom.push(...seg.slice(1));
+        else geom.push(...seg);
+      } else {
+        const p1 = [stList[i].lat, stList[i].lng];
+        const p2 = [stList[i + 1].lat, stList[i + 1].lng];
+        if (p1[0] != null && p1[1] != null && p2[0] != null && p2[1] != null) {
+          if (geom.length === 0) geom.push(p1);
+          geom.push(p2);
+        }
+      }
+    }
+    return geom;
+  }
+
   function drawActiveTrainRoute(trainId, journey) {
     activeRouteLayer.clearLayers();
     if (!journey || !journey.stops || journey.stops.length < 2) return;
@@ -495,52 +520,96 @@
     const stops = journey.stops.filter((s) => s.lat != null && s.lng != null);
     if (stops.length < 2) return;
 
+    // Determine train type and dynamic train-matched category color
+    const trainType = m ? m.type : (journey.train_type || (journey.category_name && journey.category_name.toLowerCase().includes("sprinter") ? "SPR" : "IC"));
+    const cat = trainCategory(trainType);
+    const color = trainColor(trainType);
+    const glowColor = cat === "IC" ? "rgba(255, 201, 23, 0.38)" : (cat === "SPR" ? "rgba(0, 174, 239, 0.45)" : "rgba(255, 107, 53, 0.45)");
+
+    // Retrieve high-fidelity curved railway tracks (pre-stitched or client trackIndex stitched)
+    let fullRoute = null;
+    if (journey.route_geometry && journey.route_geometry.length >= 2) {
+      fullRoute = journey.route_geometry;
+    } else if (journey.route_stations && journey.route_stations.length >= 2) {
+      fullRoute = buildTrackGeometryFromStations(journey.route_stations);
+    } else {
+      fullRoute = buildTrackGeometryFromStations(stops);
+    }
+
+    if (!fullRoute || fullRoute.length < 2) return;
+
     const nextIdx = stops.findIndex((s) => s.state === "next");
     const activeIdx = nextIdx !== -1 ? nextIdx : stops.length - 1;
 
-    // 1. Passed route track (stops[0] .. stops[activeIdx-1] and train current pos)
-    const passedCoords = [];
-    for (let i = 0; i < activeIdx; i++) {
-      passedCoords.push([stops[i].lat, stops[i].lng]);
+    // Find point on physical curved rail line closest to train's current position
+    let splitIdx = 0;
+    if (trainPos) {
+      let minDist = Infinity;
+      for (let i = 0; i < fullRoute.length; i++) {
+        const p = fullRoute[i];
+        const d = distanceMeters(trainPos.lat, trainPos.lng, p[0], p[1]);
+        if (d < minDist) {
+          minDist = d;
+          splitIdx = i;
+        }
+      }
+    } else {
+      const curStop = stops[activeIdx];
+      if (curStop) {
+        let minDist = Infinity;
+        for (let i = 0; i < fullRoute.length; i++) {
+          const p = fullRoute[i];
+          const d = distanceMeters(curStop.lat, curStop.lng, p[0], p[1]);
+          if (d < minDist) {
+            minDist = d;
+            splitIdx = i;
+          }
+        }
+      }
     }
-    if (trainPos && activeIdx > 0) {
+
+    // 1. Passed route track: following curved physical railway behind train
+    const passedCoords = fullRoute.slice(0, splitIdx + 1);
+    if (trainPos && splitIdx > 0 && splitIdx < fullRoute.length - 1) {
       passedCoords.push([trainPos.lat, trainPos.lng]);
     }
     if (passedCoords.length >= 2) {
       L.polyline(passedCoords, {
         color: "#8fa8cc",
         weight: 3.5,
-        opacity: 0.45,
-        dashArray: "5, 8",
+        opacity: 0.42,
+        dashArray: "6, 8",
         lineCap: "round",
+        lineJoin: "round",
         interactive: false,
       }).addTo(activeRouteLayer);
     }
 
-    // 2. Remaining active route track (train current pos .. stops[activeIdx] .. destination)
+    // 2. Remaining active route track: following curved physical railway ahead of train in train's exact color
     const remainingCoords = [];
-    if (trainPos) {
+    if (trainPos && splitIdx < fullRoute.length - 1) {
       remainingCoords.push([trainPos.lat, trainPos.lng]);
     }
-    for (let i = activeIdx; i < stops.length; i++) {
-      remainingCoords.push([stops[i].lat, stops[i].lng]);
-    }
+    remainingCoords.push(...fullRoute.slice(splitIdx));
+
     if (remainingCoords.length >= 2) {
-      // Outer ambient glow in NS yellow
+      // Outer ambient aura glow in train's matching color
       L.polyline(remainingCoords, {
-        color: "rgba(255, 201, 23, 0.35)",
-        weight: 8,
+        color: glowColor,
+        weight: 9,
         opacity: 0.85,
         lineCap: "round",
+        lineJoin: "round",
         interactive: false,
       }).addTo(activeRouteLayer);
 
-      // Core crisp path
+      // Core crisp high-visibility track in train's matching color
       L.polyline(remainingCoords, {
-        color: "#FFC917",
-        weight: 3.8,
-        opacity: 0.95,
+        color: color,
+        weight: 4.0,
+        opacity: 0.98,
         lineCap: "round",
+        lineJoin: "round",
         interactive: false,
       }).addTo(activeRouteLayer);
     }
@@ -551,13 +620,14 @@
       const isNext = idx === activeIdx;
       const isDest = idx === stops.length - 1;
 
-      const fillColor = isDest ? "#00e676" : (isNext ? "#FFC917" : (isPast ? "#5577aa" : "#ffffff"));
+      // Color coding: destination = emerald green, next = matching train color, past = muted slate, upcoming = crisp white
+      const fillColor = isDest ? "#00e676" : (isNext ? color : (isPast ? "#5577aa" : "#ffffff"));
       const radius = isNext ? 6.5 : (isDest ? 5.5 : 4);
 
       const circle = L.circleMarker([s.lat, s.lng], {
         radius: radius,
         fillColor: fillColor,
-        color: "#ffffff",
+        color: isNext ? "#ffffff" : "#0d1b2a",
         weight: isNext ? 2.5 : 1.5,
         fillOpacity: 1,
         className: isNext ? "pulse-stop-marker" : "",
@@ -572,6 +642,8 @@
 
       circle.addTo(activeRouteLayer);
     });
+
+    activeRouteData = { trainId, journey, fullRoute, lastUpdatePos: trainPos ? { lat: trainPos.lat, lng: trainPos.lng } : null };
   }
 
   function hideCockpitHUD() {
@@ -1786,6 +1858,7 @@
     if (openPopupId === null) {
       activeRouteLayer.clearLayers();
       activeSelectedTrainId = null;
+      activeRouteData = null;
     }
     if (followedTrainId && followedTrainId === activeSelectedTrainId) {
       followedTrainId = null;
@@ -2084,6 +2157,7 @@
           if ($drawer.classList.contains("drawer-closed")) {
             activeRouteLayer.clearLayers();
             activeSelectedTrainId = null;
+            activeRouteData = null;
             if (followedTrainId === t.id) {
               followedTrainId = null;
               updateFollowButtons();
@@ -2189,6 +2263,15 @@
       if (followedTrainId !== null && Number(id) === followedTrainId) {
         map.panTo([lat, lng], { animate: false });
         updateCockpitHUD(m);
+      }
+
+      // Dynamically advance curved route line as selected train moves along track
+      if (activeSelectedTrainId === Number(id) && activeRouteData && activeRouteData.trainId === Number(id)) {
+        const lastP = activeRouteData.lastUpdatePos;
+        if (!lastP || distanceMeters(lastP.lat, lastP.lng, lat, lng) > 40) {
+          activeRouteData.lastUpdatePos = { lat, lng };
+          drawActiveTrainRoute(Number(id), activeRouteData.journey);
+        }
       }
 
       // Keep motion trail synced with head
