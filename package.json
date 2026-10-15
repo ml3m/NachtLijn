@@ -1,0 +1,10 @@
+{
+  "name": "nachtlijn",
+  "version": "2.6.0",
+  "description": "Real-time Dutch railway radar & operations tracker",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/frontend_core.test.js"
+  },
+  "private": true
+}

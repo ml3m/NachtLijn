@@ -312,24 +312,31 @@
 
   // ── Helpers ──────────────────────────────────────────────────────
   function headingToCompass(deg) {
+    if (deg === undefined || deg === null || isNaN(deg)) return "";
     const directions = ["N", "NNO", "NO", "ONO", "O", "OZO", "ZO", "ZZO", "Z", "ZZW", "ZW", "WZW", "W", "WNW", "NW", "NNW"];
-    const val = Math.floor((deg / 22.5) + 0.5);
-    return directions[val % 16] || "";
+    const normalized = ((deg % 360) + 360) % 360;
+    const val = Math.floor((normalized / 22.5) + 0.5) % 16;
+    return directions[val] || "N";
   }
 
   function trainColor(type) {
+    const cat = trainCategory(type);
+    if (cat === "IC") return COLORS.IC;
+    if (cat === "SPR") return COLORS.SPR;
     return COLORS[type] || COLOR_OTHER;
   }
 
   function trainCategory(type) {
-    if (type === "IC" || type === "ICE") return "IC";
-    if (type === "SPR") return "SPR";
+    const t = (type || "").toUpperCase();
+    if (t === "IC" || t === "ICE") return "IC";
+    if (t === "SPR") return "SPR";
     return "other";
   }
 
   function categoryLabel(type) {
-    if (type === "IC" || type === "ICE") return "Intercity";
-    if (type === "SPR") return "Sprinter";
+    const cat = trainCategory(type);
+    if (cat === "IC") return "Intercity";
+    if (cat === "SPR") return "Sprinter";
     return type || "Trein";
   }
 
@@ -2854,21 +2861,44 @@
   loadWeather();
   checkUrlParams();
   window.addEventListener("popstate", checkUrlParams);
-  connectSSE();
-  requestAnimationFrame(animate);
-  requestAnimationFrame(updateCountdown);
+  if (typeof window !== "undefined" && !window.__TEST_ENV__) {
+    connectSSE();
+    requestAnimationFrame(animate);
+    requestAnimationFrame(updateCountdown);
 
-  // Periodic checks
-  setInterval(loadDisruptions, 60000);
-  setInterval(updateNachtnetStatus, 60000);
-  setInterval(updateSpeedLeaderboard, 3000);
-  setInterval(loadWeather, 300000);
+    // Periodic checks
+    setInterval(loadDisruptions, 60000);
+    setInterval(updateNachtnetStatus, 60000);
+    setInterval(updateSpeedLeaderboard, 3000);
+    setInterval(loadWeather, 300000);
+  }
 
   // Register PWA Service Worker
-  if ("serviceWorker" in navigator) {
+  if (typeof navigator !== "undefined" && "serviceWorker" in navigator && navigator.serviceWorker) {
     window.addEventListener("load", () => {
       navigator.serviceWorker.register("/static/sw.js").catch(() => {});
     });
+  }
+
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = {
+      distanceMeters,
+      headingToCompass,
+      trainColor,
+      trainCategory,
+      categoryLabel,
+      chevronSVG,
+      snapToTrack,
+      buildTrackGeometryFromStations,
+      advanceAlongTrack,
+      trackIndex,
+      trackSpatialGrid,
+      trackFeatures,
+      GRID_CELL_SIZE,
+      MAX_TRAIL_POINTS,
+      COLORS,
+      COLOR_OTHER,
+    };
   }
 
 })();
