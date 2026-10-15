@@ -156,6 +156,60 @@ html, body, #map { width: 100%; height: 100%; overflow: hidden; font-family: 'Se
   font-weight: 800; color: #fff; font-size: 11px; opacity: 0.95;
 }
 
+/* ── Network Punctuality & Delay Filter ─────────────────────────── */
+.punctuality-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: -4px;
+  margin-bottom: 10px;
+  padding: 4px 8px;
+  background: rgba(0, 30, 75, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+}
+.punctuality-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #c5d5ea;
+}
+.punctuality-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #00e676;
+  box-shadow: 0 0 6px #00e676;
+}
+.punctuality-dot.warn {
+  background: #ffa726;
+  box-shadow: 0 0 6px #ffa726;
+}
+.delayed-toggle-pill {
+  border: 1px solid rgba(255, 82, 82, 0.4);
+  background: rgba(255, 82, 82, 0.12);
+  color: #ff8a80;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2.5px 7px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  user-select: none;
+}
+.delayed-toggle-pill:hover {
+  background: rgba(255, 82, 82, 0.25);
+  color: #ffffff;
+}
+.delayed-toggle-pill.active {
+  background: #d50000;
+  border-color: #ff5252;
+  color: #ffffff;
+  box-shadow: 0 0 8px rgba(213, 0, 0, 0.6);
+}
+
 /* ── Countdown Ring ────────────────────────────────────────────── */
 .update-row { margin-bottom: 12px; }
 #countdown-wrap { position: relative; width: 32px; height: 32px; flex-shrink: 0; }
@@ -263,7 +317,7 @@ html, body, #map { width: 100%; height: 100%; overflow: hidden; font-family: 'Se
 .toggle-item input { accent-color: var(--ns-yellow); }
 .toggle-item:hover { color: var(--ns-white-bright); }
 
-/* ── Fleet Speed Leaderboard ───────────────────────────────────── */
+/* ── Fleet Speed & Disruptions Leaderboard Drawer ──────────────── */
 .speed-leaderboard {
   margin-top: 10px;
   background: rgba(0, 20, 56, 0.7);
@@ -271,42 +325,110 @@ html, body, #map { width: 100%; height: 100%; overflow: hidden; font-family: 'Se
   border-radius: 8px;
   overflow: hidden;
 }
-.leaderboard-header {
-  padding: 6px 10px;
-  background: rgba(0, 48, 130, 0.45);
+.leaderboard-tabs-bar {
+  padding: 4px 6px;
+  background: rgba(0, 48, 130, 0.55);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  cursor: pointer;
-  user-select: none;
-  font-size: 11px;
-  font-weight: 800;
-  color: var(--ns-yellow);
-  letter-spacing: 0.5px;
-  transition: background 0.15s ease;
+  border-bottom: 1px solid rgba(74, 158, 255, 0.2);
 }
-.leaderboard-header:hover {
-  background: rgba(0, 48, 130, 0.7);
+.radar-tab {
+  background: none;
+  border: none;
+  color: #8fa8cc;
+  font-size: 10.5px;
+  font-weight: 800;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+.radar-tab:hover {
+  color: #ffffff;
+}
+.radar-tab.active {
+  color: var(--ns-yellow);
+  background: rgba(0, 20, 56, 0.75);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
 }
 .leaderboard-chevron {
   font-size: 9px;
   color: #8fa8cc;
   transition: transform 0.25s ease;
+  cursor: pointer;
+  padding: 4px;
+}
+.leaderboard-panel-body {
+  transition: max-height 0.25s ease, opacity 0.25s ease;
+}
+.leaderboard-panel-body.collapsed {
+  display: none;
 }
 .leaderboard-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
   padding: 4px;
-  max-height: 170px;
+  max-height: 180px;
   overflow-y: auto;
-  transition: max-height 0.25s ease, opacity 0.25s ease, padding 0.25s ease;
 }
-.leaderboard-list.collapsed {
-  max-height: 0;
-  padding: 0;
-  opacity: 0;
+.disruptions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.disruption-card-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 7px;
+  border-radius: 4px;
+  background: rgba(255, 51, 68, 0.08);
+  border: 1px solid rgba(255, 51, 68, 0.25);
+  color: #ffffff;
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+.disruption-card-item:hover {
+  background: rgba(255, 51, 68, 0.22);
+  border-color: rgba(255, 51, 68, 0.55);
+  transform: translateX(2px);
+}
+.disruption-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+.disruption-card-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #ff8a80;
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 190px;
+}
+.disruption-card-cause {
+  font-size: 9.5px;
+  color: #c5d5ea;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.disruption-delay-badge {
+  font-size: 8.5px;
+  font-weight: 800;
+  color: #ff3344;
+  background: rgba(255, 51, 68, 0.2);
+  padding: 1px 4px;
+  border-radius: 3px;
+  white-space: nowrap;
 }
 .leaderboard-item {
   display: flex;

@@ -117,8 +117,19 @@
   const $cockpitJourneyBtn= document.getElementById("cockpit-journey-btn");
   const $cockpitInfoClick = document.getElementById("cockpit-info-click");
   const $audioBtn         = document.getElementById("audio-toggle-btn");
+  const $filterDelayedBtn   = document.getElementById("filter-delayed-btn");
+  const $countDelayedTrains = document.getElementById("count-delayed-trains");
+  const $punctualityText    = document.getElementById("punctuality-text");
+  const $punctualityDot     = document.getElementById("punctuality-dot");
+  const $tabSpeed           = document.getElementById("tab-btn-speed");
+  const $tabDisruptions     = document.getElementById("tab-btn-disruptions");
+  const $disruptionsTabCount= document.getElementById("disruptions-tab-count");
+  const $leaderboardBody    = document.getElementById("leaderboard-body");
+  const $disruptionsList    = document.getElementById("disruptions-list");
 
   // ── State ────────────────────────────────────────────────────────
+  let filterOnlyDelayed = false;
+  let activeRadarTab = "speed";
   let audioCtx = null;
   let audioEnabled = false;
   try {
@@ -1253,6 +1264,7 @@
       disruptionsData = await r.json();
       const list = disruptionsData.disruptions || [];
       $disruptionsLbl.textContent = `🚨 Rail disruptions (${list.length})`;
+      updateDisruptionsDrawerList(list);
       if (disruptionsVisible) {
         renderDisruptions(list);
       }
@@ -1379,6 +1391,82 @@
   }
 
   $disruptionsCb.addEventListener("change", syncToggleLayers);
+
+  function updateDisruptionsDrawerList(list) {
+    if (!$disruptionsList) return;
+    const len = list ? list.length : 0;
+    if ($disruptionsTabCount) $disruptionsTabCount.textContent = String(len);
+
+    if (!list || list.length === 0) {
+      $disruptionsList.innerHTML = `<div style="color:#8fa8cc;font-size:10.5px;padding:6px;text-align:center;">Geen actieve storingen gemeld 🟢</div>`;
+      return;
+    }
+
+    let html = "";
+    list.forEach((d) => {
+      const delayBadge = d.delay ? `<span class="disruption-delay-badge">${d.delay}</span>` : "";
+      const causeText = d.cause ? `Oorzaak: ${d.cause}` : (d.period || "Actuele verstoring");
+      html += `
+        <div class="disruption-card-item" onclick="window.focusDisruptionById('${d.id}')" title="Klik om direct naar deze storing te gaan">
+          <div class="disruption-card-header">
+            <span class="disruption-card-title">🚨 ${d.title}</span>
+            ${delayBadge}
+          </div>
+          <div class="disruption-card-cause">${causeText}</div>
+        </div>
+      `;
+    });
+    $disruptionsList.innerHTML = html;
+  }
+
+  window.focusDisruptionById = function (disruptionId) {
+    if (!disruptionsData || !disruptionsData.disruptions) return;
+    const d = disruptionsData.disruptions.find(item => String(item.id) === String(disruptionId));
+    if (!d) return;
+
+    const allCoords = [];
+    for (const sec of d.sections) {
+      for (const s of sec) {
+        if (s.lat && s.lng) {
+          allCoords.push([s.lat, s.lng]);
+        }
+      }
+    }
+
+    if (!disruptionsVisible) {
+      disruptionsVisible = true;
+      if ($disruptionsCb) $disruptionsCb.checked = true;
+      syncToggleLayers();
+    }
+
+    if (allCoords.length > 0) {
+      if (allCoords.length === 1) {
+        map.flyTo(allCoords[0], 13, { duration: 1.2 });
+      } else {
+        const bounds = L.latLngBounds(allCoords);
+        map.flyToBounds(bounds, { padding: [60, 60], maxZoom: 13, duration: 1.2 });
+      }
+
+      const midStation = d.sections[0] ? d.sections[0][Math.floor(d.sections[0].length / 2)] : null;
+      if (midStation && midStation.lat && midStation.lng) {
+        const popupContent = `
+          <div style="font-size:12.5px;line-height:1.5;max-width:280px;padding:4px;">
+            <div style="font-weight:800;color:#ff3344;margin-bottom:5px;font-size:13.5px;">🚨 ${d.title}</div>
+            ${d.cause ? `<div><b>Oorzaak:</b> ${d.cause}</div>` : ""}
+            ${d.delay ? `<div><b>Vertraging:</b> <span style="color:#ffcc00;font-weight:700;">${d.delay}</span></div>` : ""}
+            ${d.period ? `<div style="color:#8fa8cc;font-size:11px;margin-top:4px;">📅 ${d.period}</div>` : ""}
+            ${d.situation ? `<div style="font-size:11px;margin-top:6px;color:#e0e6f0;background:rgba(255,255,255,0.06);padding:6px;border-radius:4px;">${d.situation}</div>` : ""}
+          </div>
+        `;
+        setTimeout(() => {
+          L.popup({ maxWidth: 320 })
+            .setLatLng([midStation.lat, midStation.lng])
+            .setContent(popupContent)
+            .openOn(map);
+        }, 600);
+      }
+    }
+  };
 
   // ── Rolling Stock Coach Composition Visualizer ──────────────────
   function buildCoachDiagramHtml(data) {
@@ -1634,10 +1722,22 @@
   });
 
   function updateMarkerVisibility() {
+    let delayedCount = 0;
+    let totalCount = 0;
+
     for (const id in markers) {
       const m = markers[id];
+      totalCount++;
       const cat = trainCategory(m.type);
-      const isVisible = visibleTypes[cat];
+      const j = journeyCache[m.id];
+      const isDelayed = (j && j.current_delay && j.current_delay > 0) || (m.delay && m.delay > 0);
+      if (isDelayed) delayedCount++;
+
+      let isVisible = visibleTypes[cat];
+      if (filterOnlyDelayed && !isDelayed) {
+        isVisible = false;
+      }
+
       if (isVisible) {
         if (!map.hasLayer(m.marker)) map.addLayer(m.marker);
         if (showTrails && m.polyline && !map.hasLayer(m.polyline)) map.addLayer(m.polyline);
@@ -1646,6 +1746,25 @@
         if (m.polyline && map.hasLayer(m.polyline)) map.removeLayer(m.polyline);
       }
     }
+
+    if ($countDelayedTrains) {
+      $countDelayedTrains.textContent = String(delayedCount);
+    }
+    if ($punctualityText && totalCount > 0) {
+      const punctualityPct = Math.max(0, Math.min(100, Math.round(((totalCount - delayedCount) / totalCount) * 100)));
+      $punctualityText.textContent = `${punctualityPct}% Op tijd`;
+      if ($punctualityDot) {
+        $punctualityDot.className = punctualityPct < 90 ? "punctuality-dot warn" : "punctuality-dot";
+      }
+    }
+  }
+
+  if ($filterDelayedBtn) {
+    $filterDelayedBtn.addEventListener("click", () => {
+      filterOnlyDelayed = !filterOnlyDelayed;
+      $filterDelayedBtn.classList.toggle("active", filterOnlyDelayed);
+      updateMarkerVisibility();
+    });
   }
 
   $trailsCb.addEventListener("change", syncToggleLayers);
@@ -1878,6 +1997,7 @@
     }
 
     updateSpeedLeaderboard();
+    updateMarkerVisibility();
   }
 
   // ── Animation Loop (Track-Snapped Along-Track Extrapolation) ──────
@@ -2034,20 +2154,44 @@
     $list.innerHTML = html;
   }
 
-  const $leaderboardToggle = document.getElementById("leaderboard-toggle");
-  const $leaderboardList = document.getElementById("leaderboard-list");
   const $leaderboardChevron = document.getElementById("leaderboard-chevron");
 
-  if ($leaderboardToggle && $leaderboardList) {
-    $leaderboardToggle.addEventListener("click", () => {
+  function switchRadarTab(tab) {
+    activeRadarTab = tab;
+    if (tab === "speed") {
+      if ($tabSpeed) $tabSpeed.classList.add("active");
+      if ($tabDisruptions) $tabDisruptions.classList.remove("active");
+      if ($leaderboardList) $leaderboardList.style.display = "flex";
+      if ($disruptionsList) $disruptionsList.style.display = "none";
+      updateSpeedLeaderboard();
+    } else {
+      if ($tabSpeed) $tabSpeed.classList.remove("active");
+      if ($tabDisruptions) $tabDisruptions.classList.add("active");
+      if ($leaderboardList) $leaderboardList.style.display = "none";
+      if ($disruptionsList) $disruptionsList.style.display = "flex";
+      if (disruptionsData && disruptionsData.disruptions) {
+        updateDisruptionsDrawerList(disruptionsData.disruptions);
+      }
+    }
+  }
+
+  if ($tabSpeed) $tabSpeed.addEventListener("click", () => switchRadarTab("speed"));
+  if ($tabDisruptions) $tabDisruptions.addEventListener("click", () => switchRadarTab("disruptions"));
+
+  if ($leaderboardChevron && $leaderboardBody) {
+    $leaderboardChevron.addEventListener("click", () => {
       isLeaderboardCollapsed = !isLeaderboardCollapsed;
       if (isLeaderboardCollapsed) {
-        $leaderboardList.classList.add("collapsed");
-        if ($leaderboardChevron) $leaderboardChevron.style.transform = "rotate(180deg)";
+        $leaderboardBody.classList.add("collapsed");
+        $leaderboardChevron.style.transform = "rotate(180deg)";
       } else {
-        $leaderboardList.classList.remove("collapsed");
-        if ($leaderboardChevron) $leaderboardChevron.style.transform = "rotate(0deg)";
-        updateSpeedLeaderboard();
+        $leaderboardBody.classList.remove("collapsed");
+        $leaderboardChevron.style.transform = "rotate(0deg)";
+        if (activeRadarTab === "speed") {
+          updateSpeedLeaderboard();
+        } else if (disruptionsData && disruptionsData.disruptions) {
+          updateDisruptionsDrawerList(disruptionsData.disruptions);
+        }
       }
     });
   }
