@@ -349,15 +349,16 @@
     const id = (trainObj && trainObj.id) || "";
     const cat = trainCategory(type);
     const catBadge = cat.toUpperCase();
+    const glowColor = cat === "IC" ? "rgba(255, 201, 23, 0.45)" : (cat === "SPR" ? "rgba(0, 174, 239, 0.55)" : "rgba(255, 107, 53, 0.55)");
 
     return (
-      `<div class="train-selected-halo">` +
+      `<div class="train-selected-halo" style="--train-color:${color};--train-glow:${glowColor};">` +
       `<div class="selected-pulse-ring pulse-1"></div>` +
       `<div class="selected-pulse-ring pulse-2"></div>` +
       `<div class="selected-target-ring"></div>` +
       (id ? `<div class="selected-train-pill"><span class="pill-badge ${cat}">${catBadge}</span> <span>${id}</span></div>` : "") +
       `<div class="train-chevron-wrap selected" style="transform:rotate(${rot}deg);width:100%;height:100%;display:flex;align-items:center;justify-content:center;pointer-events:auto;">` +
-      `<svg viewBox="0 0 24 24" width="26" height="26" style="filter:drop-shadow(0 0 8px ${color}) drop-shadow(0 0 16px rgba(255,201,23,0.95));pointer-events:none;">` +
+      `<svg viewBox="0 0 24 24" width="26" height="26" style="filter:drop-shadow(0 0 8px ${color}) drop-shadow(0 0 16px ${glowColor});pointer-events:none;">` +
       `<path d="M12 2 L20 18 L12 14 L4 18 Z" fill="${color}" stroke="#FFFFFF" stroke-width="2.0" stroke-linejoin="round"/>` +
       `</svg></div>` +
       `</div>`
@@ -626,6 +627,7 @@
     const cat = trainCategory(trainType);
     const color = trainColor(trainType);
     const glowColor = cat === "IC" ? "rgba(255, 201, 23, 0.38)" : (cat === "SPR" ? "rgba(0, 174, 239, 0.45)" : "rgba(255, 107, 53, 0.45)");
+    const passedGlowColor = cat === "IC" ? "rgba(255, 201, 23, 0.22)" : (cat === "SPR" ? "rgba(0, 174, 239, 0.22)" : "rgba(255, 107, 53, 0.22)");
 
     // Retrieve high-fidelity curved railway tracks (pre-stitched or client trackIndex stitched)
     let fullRoute = null;
@@ -669,15 +671,15 @@
       }
     }
 
-    // 1. Passed route track: following curved physical railway behind train in faded yellow
+    // 1. Passed route track: following curved physical railway behind train in train's matching color (faded dashed)
     const passedCoords = fullRoute.slice(0, splitIdx + 1);
     if (trainPos && splitIdx > 0 && splitIdx < fullRoute.length - 1) {
       passedCoords.push([trainPos.lat, trainPos.lng]);
     }
     if (passedCoords.length >= 2) {
-      // Soft ambient underglow for completed track in faded NS yellow
+      // Soft ambient underglow for completed track in faded train category color
       L.polyline(passedCoords, {
-        color: "rgba(255, 201, 23, 0.22)",
+        color: passedGlowColor,
         weight: 7,
         opacity: 0.5,
         lineCap: "round",
@@ -685,11 +687,11 @@
         interactive: false,
       }).addTo(activeRouteLayer);
 
-      // Core faded yellow dashed polyline representing completed track
+      // Core faded dashed polyline representing completed track matching train's color
       L.polyline(passedCoords, {
-        color: "#FFC917",
+        color: color,
         weight: 3.5,
-        opacity: 0.60,
+        opacity: 0.58,
         dashArray: "6, 8",
         lineCap: "round",
         lineJoin: "round",
@@ -754,7 +756,7 @@
       const icon = L.divIcon({
         className: `route-station-marker ${stateClass}`,
         html: `
-          <div class="route-station-wrap ${stateClass}">
+          <div class="route-station-wrap ${stateClass}" style="--route-color:${color};--route-glow:${glowColor};">
             ${isNext ? '<div class="route-station-pulse-ring"></div>' : ''}
             <div class="route-station-dot ${stateClass}">
               ${iconSymbol ? `<span class="route-dot-symbol">${iconSymbol}</span>` : ''}
@@ -779,7 +781,7 @@
       stopMarker.bindTooltip(`
         <div style="font-family:'Segoe UI',sans-serif;font-size:12px;line-height:1.4;padding:2px 4px;">
           <div style="font-weight:800;color:#ffffff;font-size:13px;margin-bottom:3px;">${s.name}</div>
-          <div style="color:#FFC917;font-weight:700;">${statusDesc}</div>
+          <div style="color:${color};font-weight:700;">${statusDesc}</div>
           <div style="color:#c5d5ea;font-size:11px;">Tijd: <b>${s.time || "—"}</b>${delayInfo}</div>
           ${s.track ? `<div style="color:#8fa8cc;font-size:11px;">Spoor: <b style="color:#ffffff;">Spoor ${s.track}</b></div>` : ''}
         </div>
