@@ -116,8 +116,16 @@
   const $cockpitStopBtn   = document.getElementById("cockpit-stop-btn");
   const $cockpitJourneyBtn= document.getElementById("cockpit-journey-btn");
   const $cockpitInfoClick = document.getElementById("cockpit-info-click");
+  const $audioBtn         = document.getElementById("audio-toggle-btn");
 
   // ── State ────────────────────────────────────────────────────────
+  let audioCtx = null;
+  let audioEnabled = false;
+  try {
+    audioEnabled = localStorage.getItem("nachtlijn_audio_enabled") === "true";
+  } catch (_) {}
+  let lastAnnouncedStopKey = null;
+
   const activeRouteLayer = L.layerGroup().addTo(map);
   let followedTrainId = null;
   let activeSelectedTrainId = null;
@@ -577,6 +585,7 @@
     } else {
       followedTrainId = trainId;
       activeSelectedTrainId = trainId;
+      playNSChime();
       const m = markers[trainId];
       if (m) {
         const p = m.displayed || m.target;
@@ -625,6 +634,14 @@
 
       if (j.next_stop) {
         const ns = j.next_stop;
+        if (ns.at_station && audioEnabled) {
+          const stopKey = `${m.id}_${ns.name}`;
+          if (lastAnnouncedStopKey !== stopKey) {
+            lastAnnouncedStopKey = stopKey;
+            playNSChime();
+          }
+        }
+
         if ($cockpitNextName) {
           const trk = ns.track ? ` (Sp. ${ns.track})` : "";
           $cockpitNextName.textContent = `${ns.name}${trk}`;
@@ -693,6 +710,88 @@
     $cockpitInfoClick.addEventListener("click", () => {
       if (followedTrainId !== null) {
         window.openJourney(followedTrainId);
+      }
+    });
+  }
+
+  // ── NS Acoustic Chime Synthesizer (Web Audio API) ────────────────
+  function getAudioContext() {
+    if (!audioCtx) {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) audioCtx = new AudioCtx();
+    }
+    if (audioCtx && audioCtx.state === "suspended") {
+      audioCtx.resume();
+    }
+    return audioCtx;
+  }
+
+  function playTone(freq, startTime, duration, masterGain) {
+    if (!audioCtx) return;
+    const osc1 = audioCtx.createOscillator();
+    const osc2 = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+
+    osc1.type = "sine";
+    osc1.frequency.setValueAtTime(freq, startTime);
+
+    // Warm bell-like 2nd harmonic
+    osc2.type = "triangle";
+    osc2.frequency.setValueAtTime(freq * 2, startTime);
+
+    gainNode.gain.setValueAtTime(0.0001, startTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.24, startTime + 0.008);
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+
+    osc1.connect(gainNode);
+    osc2.connect(gainNode);
+    gainNode.connect(masterGain);
+
+    osc1.start(startTime);
+    osc2.start(startTime);
+    osc1.stop(startTime + duration + 0.05);
+    osc2.stop(startTime + duration + 0.05);
+  }
+
+  function playNSChime() {
+    if (!audioEnabled) return;
+    try {
+      const ctx = getAudioContext();
+      if (!ctx) return;
+      const now = ctx.currentTime;
+      const master = ctx.createGain();
+      master.gain.setValueAtTime(0.28, now);
+      master.connect(ctx.destination);
+
+      // Authentic NS two-tone chime: G4 (391.995 Hz) -> E4 (329.628 Hz)
+      playTone(391.995, now + 0.02, 0.42, master);
+      playTone(329.628, now + 0.38, 0.72, master);
+    } catch (_) {}
+  }
+
+  function updateAudioButton() {
+    if (!$audioBtn) return;
+    if (audioEnabled) {
+      $audioBtn.classList.add("active");
+      $audioBtn.innerHTML = "🔊";
+      $audioBtn.title = "NS Stationsgong ingeschakeld (klik om te dempen)";
+    } else {
+      $audioBtn.classList.remove("active");
+      $audioBtn.innerHTML = "🔇";
+      $audioBtn.title = "NS Stationsgong gedempt (klik om in te schakelen)";
+    }
+  }
+
+  if ($audioBtn) {
+    $audioBtn.addEventListener("click", () => {
+      audioEnabled = !audioEnabled;
+      try {
+        localStorage.setItem("nachtlijn_audio_enabled", audioEnabled ? "true" : "false");
+      } catch (_) {}
+      updateAudioButton();
+      if (audioEnabled) {
+        getAudioContext();
+        playNSChime();
       }
     });
   }
@@ -1360,6 +1459,7 @@
   window.openJourney = async function (trainId) {
     activeSelectedTrainId = trainId;
     updateUrlParam("train", trainId);
+    playNSChime();
     $drawer.classList.remove("drawer-closed");
     $drawerTitle.textContent = `Trein ${trainId}`;
     $drawerSub.textContent = `Dienstregeling en haltes ophalen…`;
@@ -2191,6 +2291,7 @@
   loadStations();
   syncToggleLayers();
   updateNachtnetStatus();
+  updateAudioButton();
   updateSpeedLeaderboard();
   checkUrlParams();
   window.addEventListener("popstate", checkUrlParams);
