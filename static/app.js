@@ -84,6 +84,12 @@
     }
   });
 
+  map.on("click", () => {
+    if (activeDockTrainId !== null) {
+      closeTrainDock();
+    }
+  });
+
   // ── DOM refs ─────────────────────────────────────────────────────
   const $count        = document.getElementById("train-count");
   const $countIc      = document.getElementById("count-ic");
@@ -103,6 +109,9 @@
   const $disruptionsLbl = document.getElementById("disruptions-label");
   const $weatherCb    = document.getElementById("weather-cb");
   const $feedBadge    = document.getElementById("feed-badge");
+
+  // Train Card Dock element (Fixed bottom-left)
+  const $trainDock    = document.getElementById("train-dock");
 
   // Drawer elements
   const $drawer       = document.getElementById("journey-drawer");
@@ -150,6 +159,7 @@
   const activeRouteLayer = L.layerGroup().addTo(map);
   let followedTrainId = null;
   let activeSelectedTrainId = null;
+  let activeDockTrainId = null;
   const markers = {};                // id -> { marker, polyline, history:[], displayed:{lat,lng}, target:{lat,lng}, prev:{lat,lng}, ... }
   const visibleTypes = { IC: true, SPR: true, other: true };
   const trackIndex = {};             // "f_code_t_code" -> [[lat, lng], [lat, lng], ...]
@@ -381,13 +391,16 @@
     }
 
     return `
-      <div class="train-card-wrap">
-        <div class="popup-head-row">
-          <span class="popup-badge ${cat}">${categoryLabel(t.type)} ${t.id}</span>
-          <span class="popup-motion-status">
-            <span class="popup-motion-dot ${isMoving ? "moving" : "stopped"}"></span>
-            <span>${isMoving ? "Rijdend" : "Stilstaand"}</span>
-          </span>
+      <div class="train-dock-wrap">
+        <div class="dock-header-row">
+          <div class="dock-header-left">
+            <span class="popup-badge ${cat}">${categoryLabel(t.type)} ${t.id}</span>
+            <span class="popup-motion-status">
+              <span class="popup-motion-dot ${isMoving ? "moving" : "stopped"}" id="live-motion-dot-${t.id}"></span>
+              <span id="live-motion-text-${t.id}">${isMoving ? "Rijdend" : "Stilstaand"}</span>
+            </span>
+          </div>
+          <button class="dock-close-btn" onclick="window.closeTrainDock()" title="Sluiten">&times;</button>
         </div>
 
         ${routeHtml}
@@ -421,7 +434,7 @@
     `;
   }
 
-  // Opens popup and loads journey details asynchronously
+  // Opens fixed bottom-left train dock and loads journey details asynchronously
   async function openTrainPopup(trainId) {
     // If journey drawer is already open, sync it with the selected train
     if (!$drawer.classList.contains("drawer-closed")) {
@@ -429,15 +442,19 @@
       return;
     }
 
+    activeDockTrainId = trainId;
     openPopupId = trainId;
     activeSelectedTrainId = trainId;
     const m = markers[trainId];
     if (!m) return;
 
-    // 1. Render immediate card with cached journey or placeholder
+    // 1. Render immediate card into bottom-left dock with cached journey or placeholder
     const cached = journeyCache[trainId];
-    m.marker.getPopup().setContent(renderTrainCard(m, cached));
-    m.marker.openPopup();
+    if ($trainDock) {
+      $trainDock.innerHTML = renderTrainCard(m, cached);
+      $trainDock.classList.remove("closed");
+      $trainDock.classList.add("open");
+    }
     if (cached) {
       drawActiveTrainRoute(trainId, cached);
     }
@@ -456,8 +473,8 @@
         journeyCache[trainId] = jData;
         drawActiveTrainRoute(trainId, jData);
 
-        // If this train's popup is still open, smoothly update the route container
-        if (openPopupId === trainId && m.marker.isPopupOpen()) {
+        // If this train's dock is still open, smoothly update the route container
+        if (activeDockTrainId === trainId && $trainDock && $trainDock.classList.contains("open")) {
           const box = document.getElementById(`route-box-${trainId}`);
           if (box) {
             const delayClass = jData.current_delay > 0 ? "delayed" : "ontime";
@@ -493,6 +510,25 @@
       } catch (_) {}
     }
   }
+
+  function closeTrainDock() {
+    activeDockTrainId = null;
+    openPopupId = null;
+    if ($trainDock) {
+      $trainDock.classList.remove("open");
+      $trainDock.classList.add("closed");
+      $trainDock.innerHTML = "";
+    }
+    if ($drawer.classList.contains("drawer-closed")) {
+      if (followedTrainId === null) {
+        activeRouteLayer.clearLayers();
+        activeSelectedTrainId = null;
+        activeRouteData = null;
+      }
+    }
+    updateFollowButtons();
+  }
+  window.closeTrainDock = closeTrainDock;
 
   // ── Active Route Tracing & Train Following ──────────────────────
   let activeRouteData = null; // { trainId, journey, fullRoute, lastUpdatePos }
@@ -663,10 +699,12 @@
     if (followedTrainId === null) {
       hideCockpitHUD();
     }
-    if (openPopupId !== null) {
-      const btn = document.getElementById(`follow-btn-${openPopupId}`);
+    document.body.classList.toggle("following-train", followedTrainId !== null);
+    const targetId = activeDockTrainId !== null ? activeDockTrainId : openPopupId;
+    if (targetId !== null) {
+      const btn = document.getElementById(`follow-btn-${targetId}`);
       if (btn) {
-        if (followedTrainId === openPopupId) {
+        if (followedTrainId === targetId) {
           btn.classList.add("active");
           btn.innerHTML = "⏹️ Stop";
         } else {
@@ -1216,6 +1254,9 @@
 
         m.on("click", (e) => {
           L.DomEvent.stopPropagation(e);
+          if (activeDockTrainId !== null) {
+            closeTrainDock();
+          }
           fetchStationDepartures(s, m);
         });
 
@@ -1258,6 +1299,9 @@
 
   window.focusStation = function (stationCode) {
     if (!stationCode) return;
+    if (activeDockTrainId !== null) {
+      closeTrainDock();
+    }
     const code = stationCode.toUpperCase();
     if (stationMarkers[code]) {
       const entry = stationMarkers[code];
@@ -1734,11 +1778,9 @@
     $drawerStock.style.display = "none";
     $drawerTimeline.innerHTML = `<div class="timeline-empty">Haltes laden…</div>`;
 
-    // Automatically close open map popup to prevent visual overlap
-    if (openPopupId !== null) {
-      const pm = markers[openPopupId];
-      if (pm && pm.marker) pm.marker.closePopup();
-      openPopupId = null;
+    // Automatically close open train dock to prevent visual overlap
+    if (activeDockTrainId !== null || openPopupId !== null) {
+      closeTrainDock();
     }
     updateFollowButtons();
 
@@ -1873,7 +1915,7 @@
   $drawerClose.addEventListener("click", () => {
     $drawer.classList.add("drawer-closed");
     updateUrlParam("train", null);
-    if (openPopupId === null) {
+    if (activeDockTrainId === null && openPopupId === null) {
       activeRouteLayer.clearLayers();
       activeSelectedTrainId = null;
       activeRouteData = null;
@@ -2158,28 +2200,12 @@
           if (showTrails) polyline.addTo(map);
         }
 
-        // Attach rich card popup
-        marker.bindPopup(renderTrainCard(t, journeyCache[t.id]), {
-          className: "train-card-popup",
-          maxWidth: 320,
-          closeButton: true
-        });
-
         marker.on("click", (e) => {
           if (e && e.originalEvent) e.originalEvent.stopPropagation();
-          openTrainPopup(t.id);
-        });
-
-        marker.on("popupclose", () => {
-          if (openPopupId === t.id) openPopupId = null;
-          if ($drawer.classList.contains("drawer-closed")) {
-            activeRouteLayer.clearLayers();
-            activeSelectedTrainId = null;
-            activeRouteData = null;
-            if (followedTrainId === t.id) {
-              followedTrainId = null;
-              updateFollowButtons();
-            }
+          if (activeDockTrainId === t.id && $trainDock && $trainDock.classList.contains("open")) {
+            closeTrainDock();
+          } else {
+            openTrainPopup(t.id);
           }
         });
 
@@ -2314,14 +2340,19 @@
         }
       }
 
-      // Smooth in-place telemetry update without tearing down the popup DOM
-      if (openPopupId === m.id && m.marker.isPopupOpen()) {
+      // Smooth in-place telemetry update without tearing down the dock DOM
+      if (activeDockTrainId === m.id && $trainDock && $trainDock.classList.contains("open")) {
         const elSpeed = document.getElementById(`live-speed-${m.id}`);
         if (elSpeed) elSpeed.textContent = `${m.speed.toFixed(1)} km/h`;
         const elHeading = document.getElementById(`live-heading-${m.id}`);
         if (elHeading) elHeading.textContent = `${m.heading.toFixed(0)}° · ${headingToCompass(m.heading)}`;
         const elPos = document.getElementById(`live-pos-${m.id}`);
         if (elPos) elPos.textContent = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+        const elDot = document.getElementById(`live-motion-dot-${m.id}`);
+        const elText = document.getElementById(`live-motion-text-${m.id}`);
+        const isMoving = m.speed >= 1.5;
+        if (elDot) elDot.className = `popup-motion-dot ${isMoving ? "moving" : "stopped"}`;
+        if (elText) elText.textContent = isMoving ? "Rijdend" : "Stilstaand";
       }
     }
 
