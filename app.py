@@ -172,8 +172,8 @@ def _build_route_geometry(route_stations: list[dict]) -> list[list[float]]:
             else:
                 geometry.extend(seg_coords)
         else:
-            p1 = [s1["lat"], s1["lng"]] if s1.get("lat") and s1.get("lng") else None
-            p2 = [s2["lat"], s2["lng"]] if s2.get("lat") and s2.get("lng") else None
+            p1 = [s1["lat"], s1["lng"]] if s1.get("lat") is not None and s1.get("lng") is not None else None
+            p2 = [s2["lat"], s2["lng"]] if s2.get("lat") is not None and s2.get("lng") is not None else None
             if p1 and p2:
                 if not geometry:
                     geometry.append(p1)
@@ -272,7 +272,12 @@ def _resolve_journey_station_progress(parsed_stops: list[dict], train_lat: float
         return 0
 
     # 1. SPATIAL RESOLUTION (Preferred: uses actual physical GPS position)
-    if train_lat is not None and train_lng is not None:
+    valid_gps = (
+        train_lat is not None and train_lng is not None
+        and not math.isnan(train_lat) and not math.isnan(train_lng)
+        and not math.isinf(train_lat) and not math.isinf(train_lng)
+    )
+    if valid_gps:
         # A. Check if train is directly at/near final destination (within 650m)
         dest_lat, dest_lng = parsed_stops[-1].get("lat"), parsed_stops[-1].get("lng")
         if dest_lat is not None and dest_lng is not None:
