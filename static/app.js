@@ -108,6 +108,16 @@
 
   function centerTrainOnMap(trainId) {
     const tid = Number(trainId);
+    if (!tid) return;
+
+    setSelectedTrain(tid);
+
+    if (typeof openTrainPopup === "function" && $drawer && $drawer.classList.contains("drawer-closed")) {
+      openTrainPopup(tid);
+    } else if (typeof window.openJourney === "function" && $drawer && !$drawer.classList.contains("drawer-closed")) {
+      window.openJourney(tid);
+    }
+
     const m = markers[tid];
     if (m) {
       const p = m.displayed || m.target;
@@ -115,6 +125,9 @@
     }
     if (followedTrainId === tid) {
       setCameraTracking(true);
+    }
+    if (typeof updateFollowButtons === "function") {
+      updateFollowButtons();
     }
   }
   window.centerTrainOnMap = centerTrainOnMap;
@@ -3400,6 +3413,9 @@
       DELAY_THRESHOLD_MIN,
       formatDelayStatus,
       getFollowedTrainId: () => followedTrainId,
+      getActiveSelectedTrainId: () => activeSelectedTrainId,
+      getActiveDockTrainId: () => activeDockTrainId,
+      openTrainPopup: (tid) => openTrainPopup(tid),
       isCameraTracking: () => isCameraTracking,
       setCameraTracking,
       centerTrainOnMap: (tid) => window.centerTrainOnMap(tid),

@@ -3,14 +3,35 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 // Setup minimal mock browser DOM & Leaflet before loading app.js
-const mockElement = () => ({
-  addEventListener: () => {},
-  classList: { toggle: () => {}, add: () => {}, remove: () => {}, contains: () => false },
-  style: {},
-  appendChild: () => {},
-  querySelector: () => null,
-  querySelectorAll: () => [],
-});
+const mockElement = (initialClasses = []) => {
+  const classes = new Set(initialClasses);
+  return {
+    addEventListener: () => {},
+    classList: {
+      toggle: (c, force) => {
+        if (force === undefined) {
+          if (classes.has(c)) classes.delete(c); else classes.add(c);
+        } else if (force) classes.add(c); else classes.delete(c);
+      },
+      add: (c) => classes.add(c),
+      remove: (c) => classes.delete(c),
+      contains: (c) => classes.has(c),
+    },
+    style: {},
+    appendChild: () => {},
+    querySelector: () => null,
+    querySelectorAll: () => [],
+  };
+};
+
+const domElements = new Map();
+function getOrCreateElement(id) {
+  if (!domElements.has(id)) {
+    const initialClasses = (id === "journey-drawer") ? ["drawer-closed"] : (id === "train-dock" ? ["closed"] : []);
+    domElements.set(id, mockElement(initialClasses));
+  }
+  return domElements.get(id);
+}
 
 const storageMap = new Map();
 globalThis.sessionStorage = {
@@ -29,7 +50,7 @@ globalThis.window = {
 };
 
 globalThis.document = {
-  getElementById: () => mockElement(),
+  getElementById: (id) => getOrCreateElement(id),
   querySelector: () => mockElement(),
   querySelectorAll: () => [],
   createElement: () => mockElement(),
@@ -588,6 +609,30 @@ test("centerTrainOnMap re-centers camera and restores tracking as firstly volg d
   core.toggleFollowTrain(3086);
   assert.equal(core.getFollowedTrainId(), null);
 });
+
+test("pressing center on followed train deselects other clicked train and selects followed train", () => {
+  // 1. Follow train 2972
+  core.toggleFollowTrain(2972);
+  assert.equal(core.getFollowedTrainId(), 2972);
+  assert.equal(core.getActiveSelectedTrainId(), 2972);
+
+  // 2. User clicks a different train 3086 (opening 3086's card dock)
+  core.openTrainPopup(3086);
+  assert.equal(core.getActiveSelectedTrainId(), 3086, "Clicked train 3086 is now selected");
+  assert.equal(core.getActiveDockTrainId(), 3086, "Dock card now displays 3086");
+  assert.equal(core.getFollowedTrainId(), 2972, "Train 2972 is still followed in background");
+
+  // 3. User presses Center on the volg train (2972)
+  core.centerTrainOnMap(2972);
+  assert.equal(core.getActiveSelectedTrainId(), 2972, "Must deselect train 3086 and select followed train 2972");
+  assert.equal(core.getActiveDockTrainId(), 2972, "Dock card must switch back to followed train 2972");
+  assert.equal(core.getFollowedTrainId(), 2972);
+  assert.equal(core.isCameraTracking(), true, "Camera tracking must be restored on 2972");
+
+  // Cleanup
+  core.toggleFollowTrain(2972);
+});
+
 
 
 
