@@ -106,12 +106,22 @@
     }
   }
 
-  function recenterCameraOnFollowedTrain() {
-    if (followedTrainId !== null && markers[followedTrainId]) {
-      const m = markers[followedTrainId];
+  function centerTrainOnMap(trainId) {
+    const tid = Number(trainId);
+    const m = markers[tid];
+    if (m) {
       const p = m.displayed || m.target;
-      map.panTo([p.lat, p.lng], { animate: true, duration: 0.5 });
+      map.panTo([p.lat, p.lng], { animate: true, duration: 0.6 });
+    }
+    if (followedTrainId === tid) {
       setCameraTracking(true);
+    }
+  }
+  window.centerTrainOnMap = centerTrainOnMap;
+
+  function recenterCameraOnFollowedTrain() {
+    if (followedTrainId !== null) {
+      centerTrainOnMap(followedTrainId);
     }
   }
 
@@ -694,6 +704,7 @@
         </div>
 
         <div class="popup-actions-row">
+          <button class="popup-btn btn-center" onclick="window.centerTrainOnMap(${t.id})" title="Centreer camera op deze trein">🎯 Centreer</button>
           <button class="popup-btn btn-follow ${followedTrainId === t.id ? 'active' : ''}" id="follow-btn-${t.id}" onclick="window.toggleFollowTrain(${t.id})">
             ${followedTrainId === t.id ? '⏹️ Stop' : '🎯 Volg Trein'}
           </button>
@@ -3391,6 +3402,7 @@
       getFollowedTrainId: () => followedTrainId,
       isCameraTracking: () => isCameraTracking,
       setCameraTracking,
+      centerTrainOnMap: (tid) => window.centerTrainOnMap(tid),
       toggleFollowTrain: (tid) => window.toggleFollowTrain(tid),
       setDisruptionsDataForTest: (data) => { disruptionsData = data; },
     };

@@ -571,5 +571,24 @@ test("follow mode persists when user moves the map until STOP is pressed", () =>
   assert.equal(core.isCameraTracking(), false);
 });
 
+test("centerTrainOnMap re-centers camera and restores tracking as firstly volg does", () => {
+  core.toggleFollowTrain(3086);
+  assert.equal(core.getFollowedTrainId(), 3086);
+
+  // User drags map away
+  core.setCameraTracking(false);
+  assert.equal(core.isCameraTracking(), false);
+
+  // User clicks Centreer button on train card
+  core.centerTrainOnMap(3086);
+  assert.equal(core.isCameraTracking(), true, "centerTrainOnMap must restore camera tracking");
+  assert.equal(core.getFollowedTrainId(), 3086);
+
+  // Stop follow mode
+  core.toggleFollowTrain(3086);
+  assert.equal(core.getFollowedTrainId(), null);
+});
+
+
 
 
