@@ -233,6 +233,7 @@
   const $tabDisruptions     = document.getElementById("tab-btn-disruptions");
   const $disruptionsTabCount= document.getElementById("disruptions-tab-count");
   const $leaderboardBody    = document.getElementById("leaderboard-body");
+  const $leaderboardList    = document.getElementById("leaderboard-list");
   const $disruptionsList    = document.getElementById("disruptions-list");
 
   // ── State ────────────────────────────────────────────────────────
@@ -3035,8 +3036,8 @@
   let isLeaderboardCollapsed = false;
 
   function updateSpeedLeaderboard() {
-    const $list = document.getElementById("leaderboard-list");
-    if (!$list || isLeaderboardCollapsed) return;
+    const $list = $leaderboardList || document.getElementById("leaderboard-list");
+    if (!$list || isLeaderboardCollapsed || activeRadarTab !== "speed") return;
 
     const moving = [];
     for (const id in markers) {
@@ -3092,9 +3093,7 @@
       if ($tabDisruptions) $tabDisruptions.classList.add("active");
       if ($leaderboardList) $leaderboardList.style.display = "none";
       if ($disruptionsList) $disruptionsList.style.display = "flex";
-      if (disruptionsData && disruptionsData.disruptions) {
-        updateDisruptionsDrawerList(disruptionsData.disruptions);
-      }
+      updateDisruptionsDrawerList((disruptionsData && disruptionsData.disruptions) || []);
     }
   }
 
@@ -3421,6 +3420,8 @@
       centerTrainOnMap: (tid) => window.centerTrainOnMap(tid),
       toggleFollowTrain: (tid) => window.toggleFollowTrain(tid),
       setDisruptionsDataForTest: (data) => { disruptionsData = data; },
+      switchRadarTab: (tab) => switchRadarTab(tab),
+      getActiveRadarTab: () => activeRadarTab,
     };
   }
 

@@ -633,7 +633,25 @@ test("pressing center on followed train deselects other clicked train and select
   core.toggleFollowTrain(2972);
 });
 
+test("switchRadarTab toggles active tab and element display without error", () => {
+  const tabSpeed = globalThis.document.getElementById("tab-btn-speed");
+  const tabDisruptions = globalThis.document.getElementById("tab-btn-disruptions");
+  const leaderboardList = globalThis.document.getElementById("leaderboard-list");
+  const disruptionsList = globalThis.document.getElementById("disruptions-list");
 
+  // Switch to disruptions tab
+  core.switchRadarTab("disruptions");
+  assert.equal(core.getActiveRadarTab(), "disruptions");
+  assert.equal(tabDisruptions.classList.contains("active"), true);
+  assert.equal(tabSpeed.classList.contains("active"), false);
+  assert.equal(leaderboardList.style.display, "none");
+  assert.equal(disruptionsList.style.display, "flex");
 
-
-
+  // Switch back to speed tab
+  core.switchRadarTab("speed");
+  assert.equal(core.getActiveRadarTab(), "speed");
+  assert.equal(tabSpeed.classList.contains("active"), true);
+  assert.equal(tabDisruptions.classList.contains("active"), false);
+  assert.equal(leaderboardList.style.display, "flex");
+  assert.equal(disruptionsList.style.display, "none");
+});
