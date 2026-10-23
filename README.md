@@ -1,4 +1,4 @@
-# 🚆 NachtLijn (Live Spoorradar & Treinvolger)
+# NachtLijn (Live Spoorradar & Treinvolger)
 
 <p align="center">
   <img src="static/logo.png" alt="NachtLijn Logo" width="260" />
