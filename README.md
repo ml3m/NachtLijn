@@ -1,7 +1,7 @@
 # 🚆 NachtLijn (Live Spoorradar & Treinvolger)
 
 <p align="center">
-  <img src="static/logo.png" alt="NachtLijn Logo" width="160" />
+  <img src="static/logo.png" alt="NachtLijn Logo" width="260" />
 </p>
 
 <p align="center">
